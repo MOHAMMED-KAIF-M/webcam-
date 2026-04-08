@@ -11,6 +11,7 @@ __pycache__/
 *.log
 
 generated_media/
+.runtime/
 
 # Legacy or duplicate model exports. The app loads active models from mod/.
 models/

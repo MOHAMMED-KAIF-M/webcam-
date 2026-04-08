@@ -187,7 +187,7 @@
                                 <label class="block">
                                     <span class="text-[11px] font-semibold uppercase tracking-[0.32em] text-slate-500">Detection Mode</span>
                                     <div class="relative mt-3">
-                                        <select name="detection_mode" class="premium-form-control block w-full appearance-none rounded-[22px] border border-slate-200 bg-[#dde6f2] px-4 py-3 text-sm text-slate-700 focus:border-amber-400 focus:outline-none focus:ring-4 focus:ring-amber-100">
+                                        <select id="detectionModeSelect" name="detection_mode" class="premium-form-control block w-full appearance-none rounded-[22px] border border-slate-200 bg-[#dde6f2] px-4 py-3 text-sm text-slate-700 focus:border-amber-400 focus:outline-none focus:ring-4 focus:ring-amber-100">
                                             {% for mode in available_detection_modes %}
                                             <option value="{{ mode.key }}" {% if mode.key == selected_mode %}selected{% endif %}>{{ mode.label }}</option>
                                             {% endfor %}
@@ -202,9 +202,14 @@
 
                                 <label class="block">
                                     <span class="text-[11px] font-semibold uppercase tracking-[0.32em] text-slate-500">Input Image Or Video</span>
-                                    <input type="file" name="file" accept="image/*,video/*" class="premium-file-input mt-3 block w-full rounded-[22px] border border-slate-200 bg-[#dde6f2] px-4 py-3 text-sm text-slate-700 file:mr-4 file:rounded-full file:border-0 file:bg-white file:px-4 file:py-2 file:text-sm file:font-semibold file:text-slate-700 focus:border-amber-400 focus:outline-none focus:ring-4 focus:ring-amber-100" required>
+                                    <input id="mediaFileInput" type="file" name="file" accept="image/*,video/*" class="premium-file-input mt-3 block w-full rounded-[22px] border border-slate-200 bg-[#dde6f2] px-4 py-3 text-sm text-slate-700 file:mr-4 file:rounded-full file:border-0 file:bg-white file:px-4 file:py-2 file:text-sm file:font-semibold file:text-slate-700 focus:border-amber-400 focus:outline-none focus:ring-4 focus:ring-amber-100" required>
                                 </label>
                             </div>
+                            {% if media_type == 'video' and video_job_id and job_status == 'completed' %}
+                            <p class="mt-4 text-sm leading-6 text-slate-600">
+                                Change the detection mode to filter the saved video analysis instantly. Selecting a new file still runs a fresh detection request instead.
+                            </p>
+                            {% endif %}
 
                             <button type="submit" class="liquid-button liquid-button--warm mt-5 w-full">
                                 <span class="liquid-button__orb" aria-hidden="true"></span>
@@ -214,6 +219,11 @@
                                 </span>
                             </button>
                         </form>
+                        {% if artifact_filter_applied %}
+                        <p class="mt-4 text-sm leading-6 text-slate-600">
+                            Showing {{ active_model_label|lower }} filtered from the saved {{ artifact_source_mode_label|lower if artifact_source_mode_label else 'video analysis' }} artifact. The preview video remains the exported analyzed video.
+                        </p>
+                        {% endif %}
 
                         <div class="premium-light-card premium-preview-shell mt-6 rounded-[30px] border border-slate-200/80 bg-white/70 p-4 shadow-soft backdrop-blur sm:p-5">
                             <div class="premium-media-stage flex min-h-[360px] items-center justify-center overflow-hidden rounded-[26px] p-3 sm:min-h-[480px] sm:p-5">
@@ -230,6 +240,31 @@
                                     <p class="mt-3 max-w-md text-sm leading-6 text-slate-300">
                                         {{ job_message or 'The uploaded video could not be processed.' }}
                                     </p>
+                                </div>
+                                {% elif media_type == 'video' and source_video_url and video_overlay_frames %}
+                                <div class="w-full">
+                                    <div class="relative mx-auto inline-block max-w-full">
+                                        <video id="filteredVideoPlayer" controls class="block max-h-[76vh] max-w-full rounded-[22px] bg-black object-contain">
+                                            <source src="{{ source_video_url }}">
+                                        </video>
+                                        <canvas id="filteredVideoOverlay" class="pointer-events-none absolute inset-0"></canvas>
+                                    </div>
+                                    <div class="mt-4 flex flex-wrap items-center gap-3 text-sm text-slate-200">
+                                        {% if frames_processed %}
+                                        <span class="premium-dark-pill rounded-full px-3 py-1.5">Frames: {{ frames_processed }}</span>
+                                        {% endif %}
+                                        {% if video_fps %}
+                                        <span class="premium-dark-pill rounded-full px-3 py-1.5">FPS: {{ video_fps }}</span>
+                                        {% endif %}
+                                        <a href="{{ source_video_url }}" class="premium-accent-pill rounded-full px-3 py-1.5 text-amber-800 transition hover:bg-amber-400/20">
+                                            Open source video
+                                        </a>
+                                        {% if result_video_url %}
+                                        <a href="{{ result_video_url }}" class="premium-accent-pill rounded-full px-3 py-1.5 text-amber-800 transition hover:bg-amber-400/20">
+                                            Open exported video
+                                        </a>
+                                        {% endif %}
+                                    </div>
                                 </div>
                                 {% elif media_type == 'video' and result_video_url %}
                                 <div class="w-full">
@@ -368,6 +403,159 @@
             }
 
             window.setTimeout(pollJob, 1500);
+        })();
+    </script>
+    {% endif %}
+    {% if media_type == 'video' and video_job_id and job_status == 'completed' %}
+    <script>
+        (function () {
+            const modeSelect = document.getElementById('detectionModeSelect');
+            const fileInput = document.getElementById('mediaFileInput');
+            const activeMode = {{ selected_mode|tojson }};
+            const videoJobId = {{ video_job_id|tojson }};
+            const videoEl = document.getElementById('filteredVideoPlayer');
+            const overlayCanvas = document.getElementById('filteredVideoOverlay');
+            const overlayFrames = {{ video_overlay_frames|tojson }};
+            const overlayBaseWidth = {{ video_overlay_width|tojson }};
+            const overlayBaseHeight = {{ video_overlay_height|tojson }};
+
+            if (!modeSelect || !videoJobId) {
+                return;
+            }
+
+            modeSelect.addEventListener('change', function () {
+                if (modeSelect.value === activeMode) {
+                    return;
+                }
+                if (fileInput && fileInput.files && fileInput.files.length > 0) {
+                    return;
+                }
+
+                const nextUrl = new URL(window.location.href);
+                nextUrl.searchParams.set('mode', modeSelect.value);
+                nextUrl.searchParams.set('job_id', videoJobId);
+                window.location.assign(nextUrl.toString());
+            });
+
+            if (!videoEl || !overlayCanvas || !overlayFrames.length || !overlayBaseWidth || !overlayBaseHeight) {
+                return;
+            }
+
+            const ctx = overlayCanvas.getContext('2d');
+            const devicePixelRatioValue = window.devicePixelRatio || 1;
+            let animationFrameId = null;
+
+            function resizeOverlay() {
+                const width = Math.max(1, Math.round(videoEl.clientWidth));
+                const height = Math.max(1, Math.round(videoEl.clientHeight));
+                overlayCanvas.width = Math.round(width * devicePixelRatioValue);
+                overlayCanvas.height = Math.round(height * devicePixelRatioValue);
+                overlayCanvas.style.width = `${width}px`;
+                overlayCanvas.style.height = `${height}px`;
+                ctx.setTransform(devicePixelRatioValue, 0, 0, devicePixelRatioValue, 0, 0);
+                drawOverlay();
+            }
+
+            function findFrameForTime(currentTime) {
+                let activeFrame = overlayFrames[0];
+                for (const frame of overlayFrames) {
+                    if ((frame.video_time_seconds || 0) <= currentTime + 0.001) {
+                        activeFrame = frame;
+                    } else {
+                        break;
+                    }
+                }
+                return activeFrame;
+            }
+
+            function drawLabel(x, y, lines) {
+                if (!lines || !lines.length) {
+                    return;
+                }
+
+                ctx.font = '600 14px Manrope, sans-serif';
+                const lineHeight = 18;
+                const textWidth = Math.max(...lines.map((line) => ctx.measureText(String(line)).width));
+                const labelX = Math.max(0, x);
+                const labelY = Math.max(18, y - 10 - (lines.length - 1) * lineHeight);
+
+                ctx.fillStyle = 'rgba(15, 23, 42, 0.72)';
+                ctx.fillRect(labelX - 6, labelY - 14, textWidth + 12, lines.length * lineHeight + 6);
+                ctx.fillStyle = '#f8fafc';
+                lines.forEach(function (line, index) {
+                    ctx.fillText(String(line), labelX, labelY + index * lineHeight);
+                });
+            }
+
+            function drawKeypoints(keypoints, scaleX, scaleY) {
+                if (!Array.isArray(keypoints) || !keypoints.length) {
+                    return;
+                }
+
+                ctx.fillStyle = '#fb923c';
+                keypoints.forEach(function (point) {
+                    if (!point || point.visible === false) {
+                        return;
+                    }
+                    ctx.beginPath();
+                    ctx.arc(point.x * scaleX, point.y * scaleY, 3, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+            }
+
+            function drawOverlay() {
+                const width = overlayCanvas.clientWidth;
+                const height = overlayCanvas.clientHeight;
+                ctx.clearRect(0, 0, width, height);
+
+                const activeFrame = findFrameForTime(videoEl.currentTime || 0);
+                if (!activeFrame || !activeFrame.phase1_output) {
+                    return;
+                }
+
+                const detections = activeFrame.phase1_output.detections || [];
+                const scaleX = width / overlayBaseWidth;
+                const scaleY = height / overlayBaseHeight;
+
+                detections.forEach(function (det) {
+                    const x1 = (det.x1 || 0) * scaleX;
+                    const y1 = (det.y1 || 0) * scaleY;
+                    const boxWidth = Math.max(0, ((det.x2 || 0) - (det.x1 || 0)) * scaleX);
+                    const boxHeight = Math.max(0, ((det.y2 || 0) - (det.y1 || 0)) * scaleY);
+
+                    ctx.strokeStyle = '#22c55e';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(x1, y1, boxWidth, boxHeight);
+                    drawLabel(x1, y1, det.overlay_lines || [det.display_label || det.label || 'Detection']);
+                    drawKeypoints(det.keypoints, scaleX, scaleY);
+                });
+            }
+
+            function startOverlayLoop() {
+                if (animationFrameId !== null) {
+                    return;
+                }
+                const tick = function () {
+                    drawOverlay();
+                    if (!videoEl.paused && !videoEl.ended) {
+                        animationFrameId = window.requestAnimationFrame(tick);
+                    } else {
+                        animationFrameId = null;
+                    }
+                };
+                animationFrameId = window.requestAnimationFrame(tick);
+            }
+
+            videoEl.addEventListener('loadedmetadata', resizeOverlay);
+            videoEl.addEventListener('play', startOverlayLoop);
+            videoEl.addEventListener('pause', drawOverlay);
+            videoEl.addEventListener('seeked', drawOverlay);
+            videoEl.addEventListener('timeupdate', drawOverlay);
+            window.addEventListener('resize', resizeOverlay);
+
+            if (videoEl.readyState >= 1) {
+                resizeOverlay();
+            }
         })();
     </script>
     {% endif %}

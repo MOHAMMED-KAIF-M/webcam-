@@ -4,10 +4,12 @@ import io
 import json
 import os
 import sys
+import tempfile
 import threading
 from datetime import datetime, timezone
 from itertools import count
 from pathlib import Path
+from urllib.parse import quote
 from uuid import uuid4
 
 import cv2
@@ -44,6 +46,66 @@ LEGACY_ACTION_LABEL_MAP_PATH = APP_ROOT / 'label_map.json'
 ACTION_PROJECT_DIR = APP_ROOT.parent / 'Human Action Recognition'
 ACTION_OUTPUT_DIR = ACTION_PROJECT_DIR / 'outputs'
 GENERATED_MEDIA_DIR = APP_ROOT / 'generated_media'
+RUNTIME_DIR = APP_ROOT / '.runtime'
+
+
+def env_positive_int(name, default):
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    try:
+        parsed_value = int(raw_value)
+    except ValueError:
+        return default
+    return parsed_value if parsed_value > 0 else default
+
+
+def resolve_torch_device():
+    requested_device = (os.getenv('MODEL_DEVICE') or '').strip()
+    if requested_device:
+        try:
+            resolved = torch.device(requested_device)
+        except (RuntimeError, ValueError):
+            resolved = torch.device('cpu')
+        if resolved.type == 'cuda' and not torch.cuda.is_available():
+            return torch.device('cpu')
+        return resolved
+
+    return torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+
+
+def device_string():
+    return str(TORCH_DEVICE)
+
+
+def move_to_device(value):
+    if hasattr(value, 'to'):
+        return value.to(TORCH_DEVICE)
+    if isinstance(value, dict):
+        return {key: move_to_device(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(move_to_device(item) for item in value)
+    return value
+
+
+def resolve_runtime_dir(env_name, default_path, fallback_path):
+    configured_path = os.getenv(env_name)
+    candidate_paths = [
+        Path(configured_path).expanduser() if configured_path else default_path,
+        fallback_path,
+    ]
+
+    for candidate in candidate_paths:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe_path = candidate / f'.write_probe_{uuid4().hex}'
+            probe_path.write_text('', encoding='utf-8')
+            probe_path.unlink(missing_ok=True)
+            return candidate
+        except OSError:
+            continue
+
+    raise RuntimeError(f'Unable to prepare a writable runtime directory for {env_name}.')
 
 # This default order matches common FER2013-style Keras checkpoints. Override it
 # by placing an emotion_labels.json file in the mod folder if needed.
@@ -51,10 +113,16 @@ EMOTION_LABELS = ['angry', 'disgust', 'fear', 'happy', 'neutral', 'sad', 'surpri
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 HUMAN_CLASS_LABELS = {'human', 'person'}
+TORCH_DEVICE = resolve_torch_device()
 IMAGE_FILE_EXTENSIONS = {'.bmp', '.jpeg', '.jpg', '.png', '.webp'}
 VIDEO_FILE_EXTENSIONS = {'.avi', '.mkv', '.mov', '.mp4', '.mpeg', '.mpg', '.webm'}
-VIDEO_MAX_INFERENCE_FRAMES = 60
-VIDEO_MAX_PROCESSING_EDGE = 640
+VIDEO_MAX_INFERENCE_FRAMES = env_positive_int('VIDEO_MAX_INFERENCE_FRAMES', 90)
+VIDEO_ALWAYS_INFER_FRAME_LIMIT = env_positive_int('VIDEO_ALWAYS_INFER_FRAME_LIMIT', 72)
+VIDEO_SLOW_MODE_MAX_INFERENCE_FRAMES = env_positive_int('VIDEO_SLOW_MODE_MAX_INFERENCE_FRAMES', 30)
+VIDEO_SLOW_MODE_ALWAYS_INFER_FRAME_LIMIT = env_positive_int('VIDEO_SLOW_MODE_ALWAYS_INFER_FRAME_LIMIT', 24)
+VIDEO_MAX_PROCESSING_EDGE = env_positive_int('VIDEO_MAX_PROCESSING_EDGE', 512)
+VIDEO_OUTPUT_MAX_EDGE = env_positive_int('VIDEO_OUTPUT_MAX_EDGE', 512)
+VIDEO_SLOW_MODES = {'combined', 'action', 'pose'}
 POSE_DETECTION_THRESHOLD = 0.5
 POSE_HUMAN_MATCH_IOU_THRESHOLD = 0.25
 ACTION_CROP_EXPANSION_RATIO = 0.18
@@ -109,7 +177,13 @@ UNCERTAINTY_THRESHOLDS = {
 PERSON_OVERLAP_IOU_THRESHOLD = 0.55
 FRAME_COUNTER = count(1)
 GENERATED_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+VIDEO_UPLOAD_DIR = resolve_runtime_dir(
+    'VIDEO_UPLOAD_DIR',
+    Path(tempfile.gettempdir()) / 'webcam_video_uploads',
+    RUNTIME_DIR / 'video_uploads',
+)
 VIDEO_JOBS = {}
+CASCADE_DETECTION_LOCK = threading.Lock()
 
 MODEL_CONFIGS = {
     'face': {
@@ -438,6 +512,7 @@ def load_h5_emotion_model(model_path, labels):
             _load_h5_dense_layer_weights(h5_file, 'dense', model.fc1)
             _load_h5_dense_layer_weights(h5_file, 'dense_1', model.fc2)
 
+    model.to(TORCH_DEVICE)
     model.eval()
     return {
         'model': model,
@@ -477,7 +552,7 @@ def load_transformers_emotion_model(model_path, labels):
     if model_path.suffix == '.safetensors':
         state_dict = safetensors_torch.load_file(str(model_path))
     else:
-        state_dict = torch.load(str(model_path), map_location='cpu')
+        state_dict = torch.load(str(model_path), map_location=TORCH_DEVICE)
 
     missing, unexpected = model.load_state_dict(state_dict, strict=False)
     if missing or unexpected:
@@ -494,6 +569,7 @@ def load_transformers_emotion_model(model_path, labels):
         image_mean=[0.5, 0.5, 0.5],
         image_std=[0.5, 0.5, 0.5],
     )
+    model.to(TORCH_DEVICE)
     model.eval()
     return {
         'model': model,
@@ -540,7 +616,7 @@ def load_action_model(model_path):
             return load_hf_action_model(model_dir)
 
     checkpoint_path = resolve_action_checkpoint_path(model_path)
-    checkpoint = torch.load(str(checkpoint_path), map_location='cpu', weights_only=False)
+    checkpoint = torch.load(str(checkpoint_path), map_location=TORCH_DEVICE, weights_only=False)
     checkpoint_payload = checkpoint if isinstance(checkpoint, dict) else {}
     class_names = checkpoint_payload.get('class_names') or resolve_action_class_names()
     image_size = int(checkpoint_payload.get('image_size', 224))
@@ -563,6 +639,7 @@ def load_action_model(model_path):
             ]
         )
 
+    model.to(TORCH_DEVICE)
     model.eval()
     return {
         'model': model,
@@ -581,7 +658,7 @@ def load_pose_model(model_path):
     weights_enum = torchvision_detection.KeypointRCNN_ResNet50_FPN_Weights
 
     model = keypointrcnn_resnet50_fpn(weights=None, weights_backbone=None)
-    checkpoint = torch.load(str(checkpoint_path), map_location='cpu', weights_only=False)
+    checkpoint = torch.load(str(checkpoint_path), map_location=TORCH_DEVICE, weights_only=False)
     if isinstance(checkpoint, dict) and isinstance(checkpoint.get('model_state_dict'), dict):
         state_dict = checkpoint['model_state_dict']
     elif isinstance(checkpoint, dict) and isinstance(checkpoint.get('state_dict'), dict):
@@ -595,6 +672,7 @@ def load_pose_model(model_path):
             f'Pose model state mismatch. Missing keys: {missing}. Unexpected keys: {unexpected}.'
         )
 
+    model.to(TORCH_DEVICE)
     model.eval()
     keypoint_names = tuple(weights_enum.DEFAULT.meta.get('keypoint_names', COCO_PERSON_KEYPOINT_NAMES))
     return {
@@ -630,6 +708,7 @@ def load_hf_action_model(model_dir):
     if not class_names:
         raise RuntimeError(f'No action labels were found in {model_dir}.')
 
+    model.to(TORCH_DEVICE)
     model.eval()
     return {
         'model': model,
@@ -652,7 +731,7 @@ def load_detector_with_runtime(candidate, runtime):
         from models.common import AutoShape
         from models.experimental import attempt_load
 
-        return AutoShape(attempt_load(str(candidate), device='cpu', fuse=False))
+        return AutoShape(attempt_load(str(candidate), device=device_string(), fuse=False))
 
     raise ValueError(f'Unsupported detector runtime: {runtime}')
 
@@ -811,6 +890,375 @@ def available_models():
     return models
 
 
+def build_model_artifact_manifest(selected_mode):
+    required_models = list(DETECTION_MODES.get(selected_mode, {}).get('models', ()))
+    load_errors = combined_model_load_errors()
+    manifest = []
+
+    for model_type, config in ALL_MODEL_CONFIGS.items():
+        resolved_path = None
+        filename = config['path'].name
+
+        model_bundle = MODELS.get(model_type) or LAZY_MODELS.get(model_type)
+        if isinstance(model_bundle, dict):
+            if 'weights_path' in model_bundle:
+                resolved_path = model_bundle['weights_path']
+            elif 'cascade_path' in model_bundle:
+                resolved_path = model_bundle['cascade_path']
+
+        if resolved_path is None:
+            try:
+                resolved_path = resolve_model_path(model_type, config)
+            except Exception:
+                resolved_path = None
+
+        if resolved_path is not None:
+            filename = Path(resolved_path).name
+
+        manifest.append({
+            'key': model_type,
+            'label': config['label'],
+            'runtime': config.get('runtime'),
+            'required_for_selected_mode': model_type in required_models,
+            'available': model_is_available(model_type),
+            'loaded': model_type in MODELS or model_type in LAZY_MODELS,
+            'filename': filename,
+            'path': str(resolved_path) if resolved_path is not None else str(config['path']),
+            'load_error': load_errors.get(model_type),
+        })
+
+    return {
+        'selected_mode': selected_mode,
+        'selected_mode_label': DETECTION_MODES[selected_mode]['label'],
+        'required_models': required_models,
+        'models': manifest,
+    }
+
+
+def required_models_for_mode(mode):
+    return list(DETECTION_MODES.get(mode, {}).get('models', ()))
+
+
+def artifact_required_models(artifact):
+    model_manifest = artifact.get('model_manifest') or {}
+    required_models = model_manifest.get('required_models')
+    if required_models:
+        return list(required_models)
+
+    source_mode = artifact.get('selected_mode')
+    return required_models_for_mode(source_mode)
+
+
+def mode_is_filterable_from_artifact(artifact, mode):
+    if mode not in DETECTION_MODES:
+        return False
+
+    return set(required_models_for_mode(mode)).issubset(set(artifact_required_models(artifact)))
+
+
+def filterable_detection_modes_for_artifact(artifact):
+    return [
+        mode
+        for mode in available_detection_modes()
+        if mode_is_filterable_from_artifact(artifact, mode['key'])
+    ]
+
+
+def load_video_artifact(job_payload):
+    result_json_url = job_payload.get('result_json_url')
+    if not result_json_url:
+        return None
+
+    artifact_path = GENERATED_MEDIA_DIR / Path(result_json_url).name
+    if not artifact_path.exists():
+        return None
+
+    with artifact_path.open('r', encoding='utf-8') as fh:
+        return json.load(fh)
+
+
+def build_source_video_url(filename):
+    if not filename:
+        return None
+
+    try:
+        return url_for('source_video', filename=filename)
+    except Exception:
+        return f"/source-videos/{quote(str(filename))}"
+
+
+def build_detection_from_object_artifact(det):
+    coordinates = det.get('coordinates') or {}
+    confidence = float(det.get('confidence') or 0.0)
+    label = det.get('label', 'object')
+    overlay_lines = [format_overlay_text(label, confidence)]
+    return {
+        'x1': int(coordinates.get('x1', 0)),
+        'y1': int(coordinates.get('y1', 0)),
+        'x2': int(coordinates.get('x2', 0)),
+        'y2': int(coordinates.get('y2', 0)),
+        'id': det.get('id'),
+        'label': label,
+        'confidence': confidence,
+        'source_model': det.get('source_model', 'object'),
+        'overlay_lines': overlay_lines,
+        'display_label': ' | '.join(overlay_lines),
+        'overlay_label': ' | '.join(overlay_lines),
+    }
+
+
+def build_detection_from_human_artifact(det, mode):
+    coordinates = det.get('coordinates') or {}
+    confidence = float(det.get('confidence') or 0.0)
+    overlay_lines = [format_overlay_text('person', confidence)]
+
+    action = det.get('action') or {}
+    if mode in {'combined', 'action'} and action.get('label') and action.get('confidence') is not None:
+        overlay_lines.append(format_overlay_text(action['label'], action['confidence']))
+
+    include_pose = mode in {'combined', 'pose'}
+    if include_pose and det.get('keypoints'):
+        visible_total = det.get('visible_keypoint_count', 0)
+        keypoint_total = det.get('keypoint_count', len(det.get('keypoints') or ()))
+        overlay_lines.append(f'Pose {visible_total}/{keypoint_total}')
+
+    payload = {
+        'x1': int(coordinates.get('x1', 0)),
+        'y1': int(coordinates.get('y1', 0)),
+        'x2': int(coordinates.get('x2', 0)),
+        'y2': int(coordinates.get('y2', 0)),
+        'id': det.get('id'),
+        'label': 'person',
+        'confidence': confidence,
+        'source_model': det.get('source_model', 'human'),
+        'overlay_lines': overlay_lines,
+        'display_label': ' | '.join(overlay_lines),
+        'overlay_label': ' | '.join(overlay_lines),
+    }
+    if include_pose:
+        payload['keypoints'] = det.get('keypoints') or []
+        payload['visible_keypoint_count'] = det.get('visible_keypoint_count')
+        payload['keypoint_count'] = det.get('keypoint_count')
+    return payload
+
+
+def build_detection_from_face_artifact(det, mode):
+    coordinates = det.get('coordinates') or {}
+    confidence = float(det.get('confidence') or 0.0)
+    overlay_lines = [format_overlay_text('face', confidence)]
+    emotion = det.get('emotion') or {}
+
+    if mode in {'combined', 'face_emotion'} and emotion.get('label') and emotion.get('confidence') is not None:
+        overlay_lines.append(format_overlay_text(emotion['label'], emotion['confidence']))
+
+    return {
+        'x1': int(coordinates.get('x1', 0)),
+        'y1': int(coordinates.get('y1', 0)),
+        'x2': int(coordinates.get('x2', 0)),
+        'y2': int(coordinates.get('y2', 0)),
+        'id': det.get('id'),
+        'label': 'face',
+        'confidence': confidence,
+        'parent_human_id': det.get('parent_human_id'),
+        'source_model': det.get('source_model', 'face'),
+        'overlay_lines': overlay_lines,
+        'display_label': ' | '.join(overlay_lines),
+        'overlay_label': ' | '.join(overlay_lines),
+    }
+
+
+def normalize_human_artifact_for_mode(det, mode):
+    normalized = dict(det)
+    summary = dict(normalized.get('summary') or {})
+
+    if mode not in {'combined', 'action'}:
+        normalized['action'] = None
+        if summary:
+            summary['action'] = 'N/A'
+
+    if mode not in {'combined', 'pose'}:
+        normalized['keypoints'] = []
+        normalized['visible_keypoint_count'] = None
+        normalized['keypoint_count'] = None
+
+    if summary:
+        normalized['summary'] = summary
+    return normalized
+
+
+def normalize_face_artifact_for_mode(det, mode):
+    normalized = dict(det)
+    if mode not in {'combined', 'face_emotion'}:
+        normalized['emotion'] = None
+    return normalized
+
+
+def filter_phase1_output_by_mode(phase1_output, mode):
+    model_artifacts = phase1_output.get('model_artifacts') or {}
+    if not model_artifacts:
+        return None
+
+    objects = model_artifacts.get('objects') or []
+    humans = model_artifacts.get('humans') or []
+    faces = model_artifacts.get('faces') or []
+    emotions = model_artifacts.get('emotions') or []
+    actions = model_artifacts.get('actions') or []
+
+    if mode == 'object':
+        filtered_objects = [dict(det) for det in objects]
+        filtered_humans = []
+        filtered_faces = []
+        filtered_emotions = []
+        filtered_actions = []
+    elif mode == 'human':
+        filtered_objects = []
+        filtered_humans = [normalize_human_artifact_for_mode(det, mode) for det in humans]
+        filtered_faces = []
+        filtered_emotions = []
+        filtered_actions = []
+    elif mode == 'action':
+        filtered_objects = []
+        filtered_humans = [normalize_human_artifact_for_mode(det, mode) for det in humans]
+        filtered_faces = []
+        filtered_emotions = []
+        filtered_actions = [dict(action) for action in actions]
+    elif mode == 'pose':
+        filtered_objects = []
+        filtered_humans = [normalize_human_artifact_for_mode(det, mode) for det in humans]
+        filtered_faces = []
+        filtered_emotions = []
+        filtered_actions = []
+    elif mode == 'face':
+        filtered_objects = []
+        filtered_humans = []
+        filtered_faces = [normalize_face_artifact_for_mode(det, mode) for det in faces]
+        filtered_emotions = []
+        filtered_actions = []
+    elif mode == 'face_emotion':
+        filtered_objects = []
+        filtered_humans = []
+        filtered_faces = [normalize_face_artifact_for_mode(det, mode) for det in faces]
+        filtered_emotions = [dict(emotion) for emotion in emotions]
+        filtered_actions = []
+    else:
+        filtered_objects = [dict(det) for det in objects]
+        filtered_humans = [normalize_human_artifact_for_mode(det, mode) for det in humans]
+        filtered_faces = [normalize_face_artifact_for_mode(det, mode) for det in faces]
+        filtered_emotions = [dict(emotion) for emotion in emotions]
+        filtered_actions = [dict(action) for action in actions]
+
+    detections = []
+    if mode in {'combined', 'object'}:
+        detections.extend(build_detection_from_object_artifact(det) for det in filtered_objects)
+    if mode in {'combined', 'human', 'action', 'pose'}:
+        detections.extend(build_detection_from_human_artifact(det, mode) for det in filtered_humans)
+    if mode in {'combined', 'face', 'face_emotion'}:
+        detections.extend(build_detection_from_face_artifact(det, mode) for det in filtered_faces)
+
+    detections = sort_detections(detections)
+    filtered_model_artifacts = {
+        'mode': mode,
+        'mode_label': DETECTION_MODES[mode]['label'],
+        'required_models': required_models_for_mode(mode),
+        'spatial_context': dict(model_artifacts.get('spatial_context') or {}),
+        'objects': filtered_objects,
+        'humans': filtered_humans,
+        'faces': filtered_faces,
+        'emotions': filtered_emotions,
+        'actions': filtered_actions,
+    }
+
+    return {
+        'frame_id': phase1_output.get('frame_id'),
+        'timestamp': phase1_output.get('timestamp'),
+        'objects': [
+            {
+                'id': det.get('id'),
+                'label': det.get('label'),
+                'confidence': det.get('confidence'),
+                'bbox': det.get('bbox'),
+            }
+            for det in filtered_objects
+        ],
+        'humans': [
+            {
+                'id': det.get('id'),
+                'confidence': det.get('confidence'),
+                'bbox': det.get('bbox'),
+                'keypoints': det.get('keypoints') or [],
+                'visible_keypoint_count': det.get('visible_keypoint_count'),
+                'keypoint_count': det.get('keypoint_count'),
+                'summary': det.get('summary'),
+            }
+            for det in filtered_humans
+        ],
+        'faces': [
+            {
+                'id': det.get('id'),
+                'parent_human_id': det.get('parent_human_id'),
+                'confidence': det.get('confidence'),
+                'bbox': det.get('bbox'),
+            }
+            for det in filtered_faces
+        ],
+        'emotions': filtered_emotions,
+        'actions': filtered_actions,
+        'notes': [],
+        'detections': detections,
+        'model_artifacts': filtered_model_artifacts,
+    }
+
+
+def build_filtered_video_job_payload(job_payload, artifact, selected_mode):
+    source_mode = artifact.get('selected_mode')
+    filtered_frames = []
+    for frame_entry in artifact.get('inference_frames') or []:
+        phase1_output = frame_entry.get('phase1_output') or {}
+        filtered_output = filter_phase1_output_by_mode(phase1_output, selected_mode)
+        if filtered_output is None:
+            continue
+        filtered_frames.append({
+            **frame_entry,
+            'phase1_output': filtered_output,
+            'detection_count': len(filtered_output.get('detections') or ()),
+        })
+
+    if filtered_frames:
+        preview_frame = next(
+            (frame for frame in filtered_frames if frame['detection_count'] > 0),
+            filtered_frames[0],
+        )
+        preview_output = preview_frame['phase1_output']
+        total_detection_count = sum(frame['detection_count'] for frame in filtered_frames)
+    else:
+        preview_output = filter_phase1_output_by_mode(artifact.get('phase1_output') or {}, selected_mode)
+        if preview_output is None:
+            preview_output = artifact.get('phase1_output')
+        total_detection_count = len(preview_output.get('detections') or ()) if preview_output else 0
+
+    source_video_filename = (
+        job_payload.get('source_video_filename')
+        or artifact.get('source_video_filename')
+    )
+    video_processing = artifact.get('video_processing') or {}
+
+    return {
+        **job_payload,
+        'selected_mode': selected_mode,
+        'selected_mode_label': DETECTION_MODES[selected_mode]['label'],
+        'detections': list((preview_output or {}).get('detections') or ()),
+        'detection_count': total_detection_count,
+        'phase1_output': preview_output,
+        'artifact_filter_applied': selected_mode != source_mode,
+        'artifact_source_mode': source_mode,
+        'artifact_source_mode_label': DETECTION_MODES.get(source_mode, {}).get('label'),
+        'source_video_url': build_source_video_url(source_video_filename),
+        'video_overlay_frames': filtered_frames,
+        'video_overlay_width': video_processing.get('output_frame_width') or job_payload.get('image_width'),
+        'video_overlay_height': video_processing.get('output_frame_height') or job_payload.get('image_height'),
+    }
+
+
 def get_template_context(selected_mode=None, **extra):
     if selected_mode not in AVAILABLE_MODE_KEYS:
         selected_mode = DEFAULT_MODE
@@ -831,6 +1279,11 @@ def render_image_detection_page(selected_mode=None, **extra):
         'result': None,
         'result_video_url': None,
         'result_video_mime': 'video/mp4',
+        'result_json_url': None,
+        'source_video_url': None,
+        'video_overlay_frames': [],
+        'video_overlay_width': None,
+        'video_overlay_height': None,
         'media_type': 'image',
         'media_label': 'Image',
         'video_job_id': None,
@@ -844,6 +1297,9 @@ def render_image_detection_page(selected_mode=None, **extra):
         'frames_processed': None,
         'video_total_frames': None,
         'video_fps': None,
+        'artifact_filter_applied': False,
+        'artifact_source_mode': None,
+        'artifact_source_mode_label': None,
         'error': None,
     }
     page_defaults.update(extra)
@@ -911,6 +1367,7 @@ def build_video_job_context(job_id, selected_mode, **extra):
         'media_label': 'Video',
         'result_video_url': None,
         'result_video_mime': 'video/mp4',
+        'result_json_url': None,
         'detections': [],
         'detection_count': 0,
         'image_width': None,
@@ -920,17 +1377,53 @@ def build_video_job_context(job_id, selected_mode, **extra):
         'video_total_frames': None,
         'video_fps': None,
         'selected_mode': selected_mode,
+        'source_video_filename': None,
+        'source_video_original_name': None,
+        'source_video_origin_job_id': None,
+        'source_video_path': None,
     }
     payload.update(extra)
     return payload
 
 
+def make_json_compatible(value):
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    if isinstance(value, float):
+        return float(value) if np.isfinite(value) else None
+    if isinstance(value, np.generic):
+        return make_json_compatible(value.item())
+    if isinstance(value, np.ndarray):
+        return [make_json_compatible(item) for item in value.tolist()]
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {
+            str(key): make_json_compatible(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [make_json_compatible(item) for item in value]
+    return str(value)
+
+
+def write_json_artifact(output_path, payload):
+    serialized_payload = make_json_compatible(payload)
+    temp_path = output_path.with_suffix(output_path.suffix + '.tmp')
+    temp_path.write_text(
+        json.dumps(serialized_payload, indent=2),
+        encoding='utf-8',
+    )
+    temp_path.replace(output_path)
+
+
 def create_compatible_video_writer(output_stem, fps, frame_width, frame_height):
     candidates = [
+        ('.webm', 'video/webm', 'VP80'),
+        ('.webm', 'video/webm', 'VP90'),
+        ('.mp4', 'video/mp4', 'mp4v'),
         ('.mp4', 'video/mp4', 'avc1'),
         ('.mp4', 'video/mp4', 'H264'),
-        ('.webm', 'video/webm', 'VP80'),
-        ('.mp4', 'video/mp4', 'mp4v'),
     ]
 
     for extension, mime_type, codec in candidates:
@@ -948,18 +1441,49 @@ def create_compatible_video_writer(output_stem, fps, frame_width, frame_height):
     raise RuntimeError('Unable to initialize a compatible video writer for the processed output.')
 
 
-def prepare_video_inference_frame(frame_bgr):
+def resize_video_frame_to_max_edge(frame_bgr, target_max_edge):
     frame_height, frame_width = frame_bgr.shape[:2]
-    max_edge = max(frame_width, frame_height)
+    source_max_edge = max(frame_width, frame_height)
 
-    if max_edge <= VIDEO_MAX_PROCESSING_EDGE:
-        return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    if source_max_edge <= target_max_edge:
+        return frame_bgr
 
-    scale = VIDEO_MAX_PROCESSING_EDGE / max_edge
+    scale = target_max_edge / source_max_edge
     resized_width = max(1, int(round(frame_width * scale)))
     resized_height = max(1, int(round(frame_height * scale)))
-    resized = cv2.resize(frame_bgr, (resized_width, resized_height), interpolation=cv2.INTER_AREA)
+    return cv2.resize(frame_bgr, (resized_width, resized_height), interpolation=cv2.INTER_AREA)
+
+
+def prepare_video_output_frame(frame_bgr):
+    return resize_video_frame_to_max_edge(frame_bgr, VIDEO_OUTPUT_MAX_EDGE)
+
+
+def prepare_video_inference_frame(frame_bgr):
+    resized = resize_video_frame_to_max_edge(frame_bgr, VIDEO_MAX_PROCESSING_EDGE)
     return cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+
+
+def resolve_video_inference_budget(selected_mode=None):
+    if selected_mode in VIDEO_SLOW_MODES:
+        return {
+            'always_infer_limit': VIDEO_SLOW_MODE_ALWAYS_INFER_FRAME_LIMIT,
+            'max_inference_frames': VIDEO_SLOW_MODE_MAX_INFERENCE_FRAMES,
+        }
+
+    return {
+        'always_infer_limit': VIDEO_ALWAYS_INFER_FRAME_LIMIT,
+        'max_inference_frames': VIDEO_MAX_INFERENCE_FRAMES,
+    }
+
+
+def resolve_video_inference_stride(total_frames, selected_mode=None):
+    budget = resolve_video_inference_budget(selected_mode)
+    always_infer_limit = budget['always_infer_limit']
+    max_inference_frames = budget['max_inference_frames']
+
+    if total_frames <= 0 or total_frames <= always_infer_limit:
+        return 1
+    return max(1, int(np.ceil(total_frames / max_inference_frames)))
 
 
 def process_video_job(job_id, input_path, output_stem, selected_mode):
@@ -979,7 +1503,8 @@ def process_video_job(job_id, input_path, output_stem, selected_mode):
     total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
     frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-    inference_stride = max(1, int(np.ceil(total_frames / VIDEO_MAX_INFERENCE_FRAMES))) if total_frames else 1
+    inference_budget = resolve_video_inference_budget(selected_mode)
+    inference_stride = resolve_video_inference_stride(total_frames, selected_mode)
 
     VIDEO_JOBS[job_id].update({
         'video_total_frames': total_frames or None,
@@ -991,12 +1516,17 @@ def process_video_job(job_id, input_path, output_stem, selected_mode):
 
     writer = None
     output_path = None
+    json_artifact_path = GENERATED_MEDIA_DIR / f'{output_stem}.json'
     output_mime = 'video/mp4'
     frames_processed = 0
     detection_count = 0
     preview_output = None
     preview_detections = []
+    preview_frame_index = None
     last_detections = []
+    output_width = None
+    output_height = None
+    inference_frames = []
 
     try:
         while True:
@@ -1007,39 +1537,60 @@ def process_video_job(job_id, input_path, output_stem, selected_mode):
             if frame_width <= 0 or frame_height <= 0:
                 frame_height, frame_width = frame_bgr.shape[:2]
 
+            output_frame_bgr = prepare_video_output_frame(frame_bgr)
+            current_output_height, current_output_width = output_frame_bgr.shape[:2]
+
             if writer is None:
+                output_width = current_output_width
+                output_height = current_output_height
                 writer, output_path, output_mime = create_compatible_video_writer(
                     output_stem,
                     fps,
-                    frame_width,
-                    frame_height,
+                    output_width,
+                    output_height,
+                )
+            elif current_output_width != output_width or current_output_height != output_height:
+                output_frame_bgr = cv2.resize(
+                    output_frame_bgr,
+                    (output_width, output_height),
+                    interpolation=cv2.INTER_AREA,
                 )
 
             if frames_processed == 0 or frames_processed % inference_stride == 0:
-                inference_rgb = prepare_video_inference_frame(frame_bgr)
+                current_frame_index = frames_processed + 1
+                inference_rgb = prepare_video_inference_frame(output_frame_bgr)
                 phase1_output = run_phase1_pipeline(
                     selected_mode,
                     inference_rgb,
-                    display_width=frame_width,
-                    display_height=frame_height,
+                    display_width=output_width,
+                    display_height=output_height,
+                    optimize_for_video=True,
+                    include_model_artifacts=True,
                 )
                 last_detections = phase1_output['detections']
                 detection_count += len(last_detections)
+                inference_frames.append({
+                    'frame_index': current_frame_index,
+                    'video_time_seconds': round((current_frame_index - 1) / fps, 3) if fps > 0 else None,
+                    'detection_count': len(last_detections),
+                    'phase1_output': phase1_output,
+                })
 
                 if last_detections or preview_output is None:
                     preview_output = phase1_output
                     preview_detections = list(last_detections)
+                    preview_frame_index = current_frame_index
 
-            annotate_display_detections(frame_bgr, last_detections)
-            writer.write(frame_bgr)
+            annotate_display_detections(output_frame_bgr, last_detections)
+            writer.write(output_frame_bgr)
 
             frames_processed += 1
             if frames_processed % 10 == 0 or frames_processed == 1:
                 VIDEO_JOBS[job_id].update({
                     'frames_processed': frames_processed,
                     'job_message': f'Processing video frames: {frames_processed}/{total_frames or "?"}',
-                    'image_width': frame_width,
-                    'image_height': frame_height,
+                    'image_width': output_width,
+                    'image_height': output_height,
                 })
 
         if frames_processed == 0:
@@ -1053,20 +1604,57 @@ def process_video_job(job_id, input_path, output_stem, selected_mode):
                 'emotions': [],
             }
 
-        VIDEO_JOBS[job_id].update({
+        if writer is not None:
+            writer.release()
+            writer = None
+
+        completed_payload = {
             'job_status': 'completed',
             'job_message': 'Detected video is ready.',
             'result_video_url': f'/generated-media/{output_path.name}',
             'result_video_mime': output_mime,
+            'result_json_url': f'/generated-media/{json_artifact_path.name}',
             'detections': preview_detections,
             'detection_count': detection_count,
-            'image_width': frame_width,
-            'image_height': frame_height,
+            'image_width': output_width or frame_width,
+            'image_height': output_height or frame_height,
             'phase1_output': preview_output,
             'frames_processed': frames_processed,
             'video_total_frames': total_frames or frames_processed,
             'video_fps': round(fps, 2),
-        })
+        }
+        artifact_payload = {
+            **VIDEO_JOBS[job_id],
+            **completed_payload,
+            'artifact_version': 2,
+            'selected_mode_label': DETECTION_MODES[selected_mode]['label'],
+            'model_manifest': build_model_artifact_manifest(selected_mode),
+            'video_processing': {
+                'input_filename': input_path.name,
+                'result_video_filename': output_path.name,
+                'artifact_filename': json_artifact_path.name,
+                'input_frame_width': frame_width,
+                'input_frame_height': frame_height,
+                'output_frame_width': output_width or frame_width,
+                'output_frame_height': output_height or frame_height,
+                'fps': round(fps, 2),
+                'total_frames': total_frames or frames_processed,
+                'frames_processed': frames_processed,
+                'inference_stride': inference_stride,
+                'inference_frame_count': len(inference_frames),
+                'max_inference_frames': inference_budget['max_inference_frames'],
+                'always_infer_frame_limit': inference_budget['always_infer_limit'],
+                'preview_frame_index': preview_frame_index,
+                'preview_video_time_seconds': (
+                    round((preview_frame_index - 1) / fps, 3)
+                    if preview_frame_index and fps > 0 else None
+                ),
+            },
+            'inference_frames': inference_frames,
+        }
+        artifact_payload.pop('source_video_path', None)
+        write_json_artifact(json_artifact_path, artifact_payload)
+        VIDEO_JOBS[job_id].update(completed_payload)
     except Exception as exc:
         VIDEO_JOBS[job_id].update({
             'job_status': 'failed',
@@ -1074,21 +1662,25 @@ def process_video_job(job_id, input_path, output_stem, selected_mode):
         })
         if output_path is not None:
             output_path.unlink(missing_ok=True)
+        json_artifact_path.unlink(missing_ok=True)
     finally:
         capture.release()
         if writer is not None:
             writer.release()
-        input_path.unlink(missing_ok=True)
 
 
-def start_video_job(file_storage, selected_mode):
-    input_suffix = Path(file_storage.filename or '').suffix.lower() or '.mp4'
+def queue_video_job(input_path, selected_mode, source_video_original_name=None, source_video_origin_job_id=None):
+    input_path = Path(input_path)
     media_stem = f'media_{uuid4().hex}'
-    input_path = GENERATED_MEDIA_DIR / f'{media_stem}{input_suffix}'
     job_id = uuid4().hex
-
-    file_storage.save(str(input_path))
-    VIDEO_JOBS[job_id] = build_video_job_context(job_id, selected_mode)
+    VIDEO_JOBS[job_id] = build_video_job_context(
+        job_id,
+        selected_mode,
+        source_video_filename=input_path.name,
+        source_video_original_name=source_video_original_name or input_path.name,
+        source_video_origin_job_id=source_video_origin_job_id,
+        source_video_path=str(input_path),
+    )
 
     worker = threading.Thread(
         target=process_video_job,
@@ -1097,6 +1689,41 @@ def start_video_job(file_storage, selected_mode):
     )
     worker.start()
     return job_id
+
+
+def start_video_job(file_storage, selected_mode):
+    input_suffix = Path(file_storage.filename or '').suffix.lower() or '.mp4'
+    media_stem = f'media_{uuid4().hex}'
+    input_path = VIDEO_UPLOAD_DIR / f'{media_stem}{input_suffix}'
+    file_storage.save(str(input_path))
+    return queue_video_job(
+        input_path,
+        selected_mode,
+        source_video_original_name=file_storage.filename or input_path.name,
+    )
+
+
+def start_video_job_from_existing(source_job_id, selected_mode):
+    source_job = VIDEO_JOBS.get(source_job_id)
+    if not source_job or source_job.get('media_type') != 'video':
+        raise ValueError('The selected video could not be found for reprocessing.')
+    if source_job.get('job_status') == 'processing':
+        raise ValueError('Wait for the current video job to finish before changing the detection mode.')
+
+    source_video_path = source_job.get('source_video_path')
+    if not source_video_path:
+        raise ValueError('The original uploaded video is unavailable for reprocessing.')
+
+    input_path = Path(source_video_path)
+    if not input_path.exists():
+        raise FileNotFoundError('The original uploaded video file is no longer available.')
+
+    return queue_video_job(
+        input_path,
+        selected_mode,
+        source_video_original_name=source_job.get('source_video_original_name') or input_path.name,
+        source_video_origin_job_id=source_job_id,
+    )
 
 
 def get_label(names, cls_idx):
@@ -1127,6 +1754,33 @@ def estimate_face_landmarks(x, y, w, h):
     }
 
 
+def safe_detect_multiscale(cascade, gray_image, *, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)):
+    if cascade is None or getattr(cascade, 'empty', lambda: False)():
+        return np.empty((0, 4), dtype=np.int32)
+    if gray_image is None or gray_image.size == 0 or gray_image.ndim < 2:
+        return np.empty((0, 4), dtype=np.int32)
+    if scaleFactor <= 1.0:
+        return np.empty((0, 4), dtype=np.int32)
+
+    image_height, image_width = gray_image.shape[:2]
+    min_width = max(1, int(minSize[0]))
+    min_height = max(1, int(minSize[1]))
+    if image_width < min_width or image_height < min_height:
+        return np.empty((0, 4), dtype=np.int32)
+
+    try:
+        cascade_input = np.ascontiguousarray(gray_image)
+        with CASCADE_DETECTION_LOCK:
+            return cascade.detectMultiScale(
+                cascade_input,
+                scaleFactor=scaleFactor,
+                minNeighbors=minNeighbors,
+                minSize=(min_width, min_height),
+            )
+    except cv2.error:
+        return np.empty((0, 4), dtype=np.int32)
+
+
 def detect_face_landmarks(model, gray_image, x, y, w, h):
     landmarks = estimate_face_landmarks(x, y, w, h)
     roi_gray = gray_image[y:y + h, x:x + w]
@@ -1136,7 +1790,8 @@ def detect_face_landmarks(model, gray_image, x, y, w, h):
     eye_cascade = model.get('eye_cascade')
     if eye_cascade is not None:
         eye_region = roi_gray[: max(1, int(h * 0.6)), :]
-        eyes = eye_cascade.detectMultiScale(
+        eyes = safe_detect_multiscale(
+            eye_cascade,
             eye_region,
             scaleFactor=1.1,
             minNeighbors=6,
@@ -1159,7 +1814,8 @@ def detect_face_landmarks(model, gray_image, x, y, w, h):
     if smile_cascade is not None:
         smile_region_y = int(h * 0.45)
         smile_region = roi_gray[smile_region_y:, :]
-        smiles = smile_cascade.detectMultiScale(
+        smiles = safe_detect_multiscale(
+            smile_cascade,
             smile_region,
             scaleFactor=1.7,
             minNeighbors=20,
@@ -1180,15 +1836,85 @@ def detect_face_landmarks(model, gray_image, x, y, w, h):
     return landmarks
 
 
+def face_rect_area(rect):
+    return max(0, int(rect[2])) * max(0, int(rect[3]))
+
+
+def face_rect_iou(rect_a, rect_b):
+    ax1, ay1, aw, ah = [int(value) for value in rect_a]
+    bx1, by1, bw, bh = [int(value) for value in rect_b]
+    ax2 = ax1 + aw
+    ay2 = ay1 + ah
+    bx2 = bx1 + bw
+    by2 = by1 + bh
+
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+    intersection = max(0, inter_x2 - inter_x1) * max(0, inter_y2 - inter_y1)
+    if intersection == 0:
+        return 0.0
+
+    union = face_rect_area(rect_a) + face_rect_area(rect_b) - intersection
+    return intersection / union if union > 0 else 0.0
+
+
+def merge_face_rectangles(rectangles, iou_threshold=0.35):
+    merged = []
+    for rect in sorted(rectangles, key=face_rect_area, reverse=True):
+        if any(face_rect_iou(rect, existing) >= iou_threshold for existing in merged):
+            continue
+        merged.append(rect)
+    return sorted(merged, key=lambda rect: (int(rect[1]), int(rect[0])))
+
+
 def run_face_detection(model, image_np):
-    gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
-    gray = cv2.equalizeHist(gray)
-    faces = model['cascade'].detectMultiScale(
+    if image_np is None or image_np.size == 0 or image_np.ndim < 2:
+        return []
+    if image_np.ndim == 2:
+        gray = image_np
+    else:
+        gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
+    landmark_gray = gray
+    faces = safe_detect_multiscale(
+        model['cascade'],
         gray,
         scaleFactor=1.1,
         minNeighbors=5,
         minSize=(30, 30),
     )
+    if len(faces) == 0:
+        equalized_gray = cv2.equalizeHist(gray)
+        faces = safe_detect_multiscale(
+            model['cascade'],
+            equalized_gray,
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(30, 30),
+        )
+        if len(faces) > 0:
+            landmark_gray = equalized_gray
+
+    if len(faces) == 0:
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
+        relaxed_candidates = []
+        min_edge = max(24, int(min(gray.shape[:2]) * 0.06))
+        for candidate_gray in (gray, clahe):
+            for scale_factor, min_neighbors in ((1.06, 5), (1.04, 5)):
+                relaxed_candidates.extend(
+                    safe_detect_multiscale(
+                        model['cascade'],
+                        candidate_gray,
+                        scaleFactor=scale_factor,
+                        minNeighbors=min_neighbors,
+                        minSize=(min_edge, min_edge),
+                    )
+                )
+        faces = merge_face_rectangles(relaxed_candidates)
+        if len(faces) > 0:
+            landmark_gray = gray
+
     if len(faces) == 0:
         return []
 
@@ -1201,7 +1927,7 @@ def run_face_detection(model, image_np):
             'y2': int(y + h),
             'confidence': 1.0,
             'label': 'face',
-            'landmarks': detect_face_landmarks(model, gray, int(x), int(y), int(w), int(h)),
+            'landmarks': detect_face_landmarks(model, landmark_gray, int(x), int(y), int(w), int(h)),
         })
     return detections
 
@@ -1263,7 +1989,7 @@ def draw_pose_overlay(image_bgr, keypoints):
 def run_pose_detection(model, image_np):
     detector = model['model']
     image_height, image_width = image_np.shape[:2]
-    image_tensor = torch.from_numpy(image_np.transpose(2, 0, 1)).float().div(255.0)
+    image_tensor = torch.from_numpy(image_np.transpose(2, 0, 1)).float().div(255.0).to(TORCH_DEVICE)
 
     with torch.inference_mode():
         outputs = detector([image_tensor])[0]
@@ -1320,7 +2046,7 @@ def run_detector_detection(model, image_np):
     detections = []
 
     if model.get('runtime') == 'ultralytics':
-        results = detector.predict(source=image_np, imgsz=640, device='cpu', verbose=False)
+        results = detector.predict(source=image_np, imgsz=640, device=device_string(), verbose=False)
         if not results:
             return detections
 
@@ -1456,6 +2182,35 @@ def scale_keypoints(keypoints, spatial_context=None):
         }
         for point in keypoints
     ]
+
+
+def scale_point(point, spatial_context=None):
+    if not isinstance(point, (list, tuple)) or len(point) < 2:
+        return point
+
+    if not spatial_context:
+        return [
+            int(round(point[0])),
+            int(round(point[1])),
+        ]
+
+    return [
+        int(round(point[0] * spatial_context['scale_x'])),
+        int(round(point[1] * spatial_context['scale_y'])),
+    ]
+
+
+def scale_landmarks(landmarks, spatial_context=None):
+    if not landmarks:
+        return None
+
+    scaled = {}
+    for key, value in landmarks.items():
+        if key == 'source':
+            scaled[key] = value
+            continue
+        scaled[key] = scale_point(value, spatial_context)
+    return scaled
 
 
 def as_bbox(det, spatial_context=None):
@@ -1655,13 +2410,13 @@ def annotate_face_emotions(image_np, face_detections):
     labels = emotion_bundle['labels']
 
     if emotion_bundle.get('runtime') == 'keras_h5':
-        inputs = preprocess_h5_face_crops(face_crops, emotion_bundle['input_size'])
+        inputs = preprocess_h5_face_crops(face_crops, emotion_bundle['input_size']).to(TORCH_DEVICE)
         with torch.inference_mode():
             logits = model(inputs)
             probabilities = torch.softmax(logits, dim=-1)
     else:
         processor = emotion_bundle['processor']
-        inputs = processor(images=face_crops, return_tensors='pt')
+        inputs = move_to_device(processor(images=face_crops, return_tensors='pt'))
         with torch.inference_mode():
             logits = model(**inputs).logits
             probabilities = torch.softmax(logits, dim=-1)
@@ -1717,7 +2472,7 @@ def detect_objects(frame, mode='combined'):
     return sort_detections(detections)
 
 
-def run_combined_detections(frame):
+def run_combined_detections(frame, include_pose=True):
     object_detections = []
     if 'object' in MODELS:
         object_detections = run_detector_detection(MODELS['object'], frame)
@@ -1737,7 +2492,7 @@ def run_combined_detections(frame):
             det['source_model'] = det.get('source_model', 'object')
         human_detections = merge_human_detections(human_detections, object_person_detections)
 
-    if model_is_available('pose'):
+    if include_pose and model_is_available('pose'):
         pose_detections = run_pose_detection(get_model_bundle('pose'), frame)
         for det in pose_detections:
             det['label'] = 'person'
@@ -1846,12 +2601,12 @@ def annotate_human_actions(image_np, human_detections):
 
     if action_bundle.get('runtime') == 'hf_image_classification':
         processor = action_bundle['processor']
-        inputs = processor(images=human_crops, return_tensors='pt')
+        inputs = move_to_device(processor(images=human_crops, return_tensors='pt'))
         with torch.inference_mode():
             logits = model(**inputs).logits
             probabilities = torch.softmax(logits, dim=-1)
     else:
-        batch = torch.stack([action_bundle['transform'](crop) for crop in human_crops], dim=0)
+        batch = torch.stack([action_bundle['transform'](crop) for crop in human_crops], dim=0).to(TORCH_DEVICE)
         with torch.inference_mode():
             logits = model(batch)
             probabilities = torch.softmax(logits, dim=-1)
@@ -1903,6 +2658,116 @@ def build_frame_notes(object_detections, human_detections, face_detections, emot
         notes.append(f'{low_confidence_total} detection(s) flagged as uncertain due to low confidence.')
 
     return notes
+
+
+def build_object_artifact(det, spatial_context):
+    return {
+        'id': det['id'],
+        'label': det['label'],
+        'confidence': det['confidence'],
+        'bbox': as_bbox(det, spatial_context),
+        'coordinates': scale_box_coordinates(det, spatial_context),
+        'source_model': det.get('source_model'),
+        'display_label': det.get('display_label'),
+        'overlay_lines': list(det.get('overlay_lines') or ()),
+        'overlay_label': build_overlay_label(det),
+        'uncertain': is_uncertain(det.get('confidence'), 'object'),
+        'uncertainty_reason': uncertainty_reason(det.get('confidence'), 'object'),
+    }
+
+
+def build_human_artifact(det, spatial_context):
+    return {
+        'id': det['id'],
+        'label': det.get('label', 'person'),
+        'confidence': det['confidence'],
+        'bbox': as_bbox(det, spatial_context),
+        'coordinates': scale_box_coordinates(det, spatial_context),
+        'source_model': det.get('source_model'),
+        'keypoints': scale_keypoints(det.get('keypoints'), spatial_context),
+        'visible_keypoint_count': det.get('visible_keypoint_count'),
+        'keypoint_count': det.get('keypoint_count'),
+        'summary': det.get('summary'),
+        'action': {
+            'label': det.get('action_label'),
+            'confidence': det.get('action_confidence'),
+            'scores': det.get('action_scores'),
+        } if det.get('action_label') else None,
+        'display_label': det.get('display_label'),
+        'overlay_lines': list(det.get('overlay_lines') or ()),
+        'overlay_label': build_overlay_label(det),
+        'uncertain': is_uncertain(det.get('confidence'), 'human'),
+        'uncertainty_reason': uncertainty_reason(det.get('confidence'), 'human'),
+    }
+
+
+def build_face_artifact(det, spatial_context):
+    return {
+        'id': det['id'],
+        'label': det.get('label', 'face'),
+        'confidence': det['confidence'],
+        'bbox': as_bbox(det, spatial_context),
+        'coordinates': scale_box_coordinates(det, spatial_context),
+        'parent_human_id': det.get('parent_human_id'),
+        'source_model': det.get('source_model'),
+        'landmarks': scale_landmarks(det.get('landmarks'), spatial_context),
+        'emotion': {
+            'label': det.get('emotion_label'),
+            'confidence': det.get('emotion_confidence'),
+            'scores': det.get('emotion_scores'),
+        } if det.get('emotion_label') else None,
+        'display_label': det.get('display_label'),
+        'overlay_lines': list(det.get('overlay_lines') or ()),
+        'overlay_label': build_overlay_label(det),
+        'uncertain': is_uncertain(det.get('confidence'), 'face'),
+        'uncertainty_reason': uncertainty_reason(det.get('confidence'), 'face'),
+    }
+
+
+def build_model_artifacts(mode, spatial_context, object_detections, human_detections, face_detections, emotions, actions):
+    emotion_scores_by_face = {
+        det['id']: det.get('emotion_scores')
+        for det in face_detections
+        if det.get('emotion_scores')
+    }
+    action_scores_by_human = {
+        det['id']: det.get('action_scores')
+        for det in human_detections
+        if det.get('action_scores')
+    }
+
+    return {
+        'mode': mode,
+        'mode_label': DETECTION_MODES[mode]['label'],
+        'required_models': list(DETECTION_MODES[mode]['models']),
+        'spatial_context': dict(spatial_context),
+        'objects': [
+            build_object_artifact(det, spatial_context)
+            for det in object_detections
+        ],
+        'humans': [
+            build_human_artifact(det, spatial_context)
+            for det in human_detections
+        ],
+        'faces': [
+            build_face_artifact(det, spatial_context)
+            for det in face_detections
+        ],
+        'emotions': [
+            {
+                **emotion,
+                'scores': emotion_scores_by_face.get(emotion['face_id']),
+            }
+            for emotion in emotions
+        ],
+        'actions': [
+            {
+                **action,
+                'scores': action_scores_by_human.get(action['human_id']),
+            }
+            for action in actions
+        ],
+    }
 
 
 def build_output(frame_meta, object_detections, human_detections, face_detections, emotions, spatial_context):
@@ -2024,12 +2889,22 @@ def run_detection(model_type, image_np):
     raise ValueError(f'Unsupported model type: {model_type}')
 
 
-def run_phase1_pipeline(mode, image_np, display_width=None, display_height=None):
+def run_phase1_pipeline(
+    mode,
+    image_np,
+    display_width=None,
+    display_height=None,
+    optimize_for_video=False,
+    include_model_artifacts=False,
+):
     frame_meta = next_frame_metadata()
     spatial_context = build_spatial_context(image_np, display_width=display_width, display_height=display_height)
 
     if mode == 'combined':
-        object_detections, human_detections = run_combined_detections(image_np)
+        object_detections, human_detections = run_combined_detections(
+            image_np,
+            include_pose=not optimize_for_video,
+        )
     else:
         object_detections = detect_objects(image_np, mode=mode)
         human_detections = extract_humans(object_detections)
@@ -2070,6 +2945,16 @@ def run_phase1_pipeline(mode, image_np, display_width=None, display_height=None)
         face_detections,
         spatial_context,
     )
+    if include_model_artifacts:
+        phase1_output['model_artifacts'] = build_model_artifacts(
+            mode,
+            spatial_context,
+            object_detections,
+            human_detections,
+            face_detections,
+            emotions,
+            phase1_output.get('actions', []),
+        )
     return phase1_output
 
 
@@ -2085,6 +2970,11 @@ def run_detection_mode(mode, image_np, display_width=None, display_height=None):
 @app.route('/generated-media/<path:filename>')
 def generated_media(filename):
     return send_from_directory(GENERATED_MEDIA_DIR, filename)
+
+
+@app.route('/source-videos/<path:filename>')
+def source_video(filename):
+    return send_from_directory(VIDEO_UPLOAD_DIR, filename)
 
 
 @app.route('/video-job-status/<job_id>')
@@ -2105,6 +2995,26 @@ def image_detection():
     job_id = request.args.get('job_id')
     if job_id and job_id in VIDEO_JOBS:
         job_payload = dict(VIDEO_JOBS[job_id])
+        if job_payload.get('media_type') == 'video' and job_payload.get('job_status') == 'completed':
+            artifact = load_video_artifact(job_payload)
+            if artifact is not None:
+                compatible_modes = filterable_detection_modes_for_artifact(artifact)
+                compatible_mode_keys = [mode['key'] for mode in compatible_modes]
+                source_mode = artifact.get('selected_mode')
+                if selected_mode not in compatible_mode_keys:
+                    if source_mode in compatible_mode_keys:
+                        selected_mode = source_mode
+                    elif compatible_mode_keys:
+                        selected_mode = compatible_mode_keys[0]
+                if selected_mode in compatible_mode_keys:
+                    filtered_payload = build_filtered_video_job_payload(job_payload, artifact, selected_mode)
+                    filtered_payload.pop('selected_mode', None)
+                    return render_image_detection_page(
+                        selected_mode=selected_mode,
+                        available_detection_modes=compatible_modes,
+                        **filtered_payload,
+                    )
+
         job_payload.pop('selected_mode', None)
         return render_image_detection_page(selected_mode=selected_mode, **job_payload)
     return render_image_detection_page(selected_mode=selected_mode)
@@ -2130,6 +3040,10 @@ def detect():
                 image = Image.open(io.BytesIO(base64.b64decode(img_data))).convert('RGB')
                 image_np = np.array(image)
         else:
+            source_video_job_id = (request.form.get('source_video_job_id') or '').strip()
+            if source_video_job_id:
+                job_id = start_video_job_from_existing(source_video_job_id, selected_mode)
+                return redirect(url_for('image_detection', mode=selected_mode, job_id=job_id))
             if 'file' not in request.files:
                 return render_image_detection_page(selected_mode=selected_mode, error='No file uploaded')
             file = request.files['file']
