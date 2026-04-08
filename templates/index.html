@@ -1,0 +1,1295 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sentinel Vision | Detection Console</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Sora:wght@500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        midnight: '#0f1b34',
+                        deep: '#172543',
+                        brass: '#f59e0b',
+                        ember: '#d76512',
+                        parchment: '#f5efe6',
+                        mist: '#dbe6f5',
+                        skycore: '#8fd4ff',
+                        jade: '#5eead4',
+                        coral: '#fb7185'
+                    },
+                    fontFamily: {
+                        sans: ['Manrope', 'sans-serif'],
+                        display: ['Sora', 'sans-serif']
+                    },
+                    boxShadow: {
+                        shell: '0 40px 120px rgba(2, 8, 23, 0.48)',
+                        soft: '0 20px 48px rgba(15, 23, 42, 0.18)'
+                    }
+                }
+            }
+        };
+    </script>
+    <style>
+        body {
+            font-family: 'Manrope', sans-serif;
+            background:
+                radial-gradient(circle at 12% 14%, rgba(251, 191, 36, 0.34), transparent 18%),
+                radial-gradient(circle at 84% 12%, rgba(125, 211, 252, 0.32), transparent 20%),
+                radial-gradient(circle at 76% 78%, rgba(96, 165, 250, 0.24), transparent 22%),
+                radial-gradient(circle at 24% 84%, rgba(255, 255, 255, 0.18), transparent 18%),
+                linear-gradient(136deg, #07111f 0%, #102345 34%, #153862 52%, #e4ebf4 52%, #f6f8fb 100%);
+            background-attachment: fixed;
+        }
+
+        .page-grid {
+            background-image:
+                linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+            background-size: 72px 72px;
+            mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.96), rgba(0, 0, 0, 0.42));
+        }
+
+        .dark-panel,
+        .light-panel {
+            position: relative;
+            backdrop-filter: blur(30px) saturate(155%);
+            -webkit-backdrop-filter: blur(30px) saturate(155%);
+        }
+
+        .dark-panel::before,
+        .light-panel::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.16), transparent 42%, rgba(255, 255, 255, 0.06));
+        }
+
+        .dark-panel {
+            background:
+                radial-gradient(circle at 12% 14%, rgba(255, 255, 255, 0.16), transparent 18%),
+                radial-gradient(circle at 84% 12%, rgba(125, 211, 252, 0.18), transparent 24%),
+                linear-gradient(180deg, rgba(10, 18, 34, 0.56) 0%, rgba(7, 14, 27, 0.34) 52%, rgba(6, 11, 21, 0.46) 100%);
+        }
+
+        .light-panel {
+            background:
+                radial-gradient(circle at top right, rgba(255, 255, 255, 0.56), transparent 24%),
+                radial-gradient(circle at 14% 90%, rgba(125, 211, 252, 0.14), transparent 22%),
+                linear-gradient(180deg, rgba(255, 255, 255, 0.32) 0%, rgba(255, 255, 255, 0.12) 100%);
+        }
+
+        main {
+            position: relative;
+        }
+
+        .stage-frame::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            padding: 1px;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.42), rgba(143, 212, 255, 0.2), rgba(245, 158, 11, 0.24));
+            -webkit-mask:
+                linear-gradient(#fff 0 0) content-box,
+                linear-gradient(#fff 0 0);
+            -webkit-mask-composite: xor;
+            mask-composite: exclude;
+            pointer-events: none;
+        }
+
+        .stage-frame {
+            background:
+                radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.14), transparent 22%),
+                radial-gradient(circle at 82% 14%, rgba(125, 211, 252, 0.16), transparent 26%),
+                linear-gradient(180deg, rgba(7, 12, 24, 0.78) 0%, rgba(5, 10, 22, 0.48) 100%);
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.08),
+                0 30px 70px rgba(2, 8, 23, 0.28);
+            backdrop-filter: blur(24px) saturate(140%);
+            -webkit-backdrop-filter: blur(24px) saturate(140%);
+        }
+
+        .stage-frame:fullscreen,
+        .stage-frame:-webkit-full-screen {
+            width: 100vw;
+            height: 100vh;
+            border-radius: 0;
+            background: #020617;
+        }
+
+        .stage-frame:fullscreen::before,
+        .stage-frame:-webkit-full-screen::before {
+            border-radius: 0;
+        }
+
+        .stage-frame:fullscreen #video,
+        .stage-frame:-webkit-full-screen #video,
+        .stage-frame:fullscreen #overlay,
+        .stage-frame:-webkit-full-screen #overlay,
+        .stage-frame:fullscreen #videoPlaceholder,
+        .stage-frame:-webkit-full-screen #videoPlaceholder {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: var(--fullscreen-content-width, 100vw);
+            height: var(--fullscreen-content-height, 100vh);
+            transform: translate(-50%, -50%);
+            border-radius: 0;
+        }
+
+        #video,
+        #overlay {
+            width: 100%;
+            height: 100%;
+            border-radius: 28px;
+        }
+
+        #video {
+            object-fit: fill;
+        }
+
+        #overlay {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+        }
+
+        .scan-line {
+            animation: scan 6s linear infinite;
+        }
+
+        .status-card {
+            border-radius: 22px;
+            padding: 1rem 1.125rem;
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.72),
+                0 16px 30px rgba(148, 163, 184, 0.12);
+            backdrop-filter: blur(22px) saturate(165%);
+            -webkit-backdrop-filter: blur(22px) saturate(165%);
+        }
+
+        .status-dot {
+            margin-top: 0.3rem;
+            height: 0.625rem;
+            width: 0.625rem;
+            border-radius: 9999px;
+            flex-shrink: 0;
+        }
+
+        .status-info {
+            border-color: rgba(125, 211, 252, 0.28);
+            background: linear-gradient(180deg, rgba(239, 246, 255, 0.62), rgba(219, 234, 254, 0.3));
+        }
+
+        .status-info .status-dot {
+            background: #0ea5e9;
+        }
+
+        .status-success {
+            border-color: rgba(74, 222, 128, 0.24);
+            background: linear-gradient(180deg, rgba(240, 253, 244, 0.62), rgba(220, 252, 231, 0.3));
+        }
+
+        .status-success .status-dot {
+            background: #16a34a;
+        }
+
+        .status-warning {
+            border-color: rgba(245, 158, 11, 0.22);
+            background: linear-gradient(180deg, rgba(255, 251, 235, 0.64), rgba(254, 243, 199, 0.32));
+        }
+
+        .status-warning .status-dot {
+            background: #d97706;
+        }
+
+        .status-danger {
+            border-color: rgba(251, 113, 133, 0.22);
+            background: linear-gradient(180deg, rgba(255, 241, 242, 0.66), rgba(255, 228, 230, 0.32));
+        }
+
+        .status-danger .status-dot {
+            background: #e11d48;
+        }
+        .live-pulse {
+            height: 0.75rem;
+            width: 0.75rem;
+            border-radius: 9999px;
+            transition: box-shadow 160ms ease, background-color 160ms ease;
+        }
+
+        .pulse-idle {
+            background: #94a3b8;
+            box-shadow: none;
+        }
+
+        .pulse-info {
+            background: #0ea5e9;
+            box-shadow: 0 0 0 6px rgba(14, 165, 233, 0.16);
+        }
+
+        .pulse-success {
+            background: #16a34a;
+            box-shadow: 0 0 0 6px rgba(34, 197, 94, 0.16);
+        }
+
+        .pulse-warning {
+            background: #d97706;
+            box-shadow: 0 0 0 6px rgba(245, 158, 11, 0.16);
+        }
+
+        .pulse-danger {
+            background: #e11d48;
+            box-shadow: 0 0 0 6px rgba(244, 63, 94, 0.16);
+        }
+
+        .control-field {
+            width: 100%;
+            border-radius: 1.25rem;
+            border: 1px solid rgba(255, 255, 255, 0.42);
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0.18));
+            padding: 0.95rem 1rem;
+            font-size: 0.95rem;
+            color: #16233d;
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.72),
+                0 10px 24px rgba(148, 163, 184, 0.1);
+            backdrop-filter: blur(22px) saturate(165%);
+            -webkit-backdrop-filter: blur(22px) saturate(165%);
+            transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+        }
+
+        .control-field::placeholder {
+            color: rgba(71, 85, 105, 0.78);
+        }
+
+        .control-field:focus {
+            outline: none;
+            border-color: rgba(217, 119, 6, 0.38);
+            box-shadow:
+                0 0 0 4px rgba(245, 158, 11, 0.1),
+                0 14px 28px rgba(245, 158, 11, 0.1);
+            background: rgba(255, 255, 255, 0.64);
+        }
+
+        .soft-rule {
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.46), transparent);
+        }
+
+{% include '_liquid_button.css' %}
+{% include '_premium_polish.css' %}
+
+        @keyframes scan {
+            0% {
+                transform: translateY(0);
+                opacity: 0;
+            }
+            12% {
+                opacity: 0.75;
+            }
+            50% {
+                transform: translateY(320px);
+                opacity: 0.35;
+            }
+            100% {
+                transform: translateY(640px);
+                opacity: 0;
+            }
+        }
+    </style>
+</head>
+<body class="min-h-full">
+    <div class="pointer-events-none fixed inset-0 overflow-hidden">
+        <div class="absolute inset-0 page-grid opacity-35"></div>
+        <div class="absolute left-[-10rem] top-[-7rem] h-80 w-80 rounded-full bg-amber-400/20 blur-3xl"></div>
+        <div class="absolute right-[-10rem] top-[18%] h-96 w-96 rounded-full bg-sky-400/10 blur-3xl"></div>
+        <div class="absolute bottom-[-12rem] right-[-6rem] h-[28rem] w-[28rem] rounded-full bg-blue-300/12 blur-3xl"></div>
+    </div>
+
+    <div class="relative flex min-h-screen items-center py-8">
+        <div class="mx-auto w-full max-w-[1760px] px-4 sm:px-6 lg:px-8">
+            <main class="premium-shell overflow-hidden rounded-[38px] border border-white/10 bg-white/[0.04] shadow-shell backdrop-blur">
+                <div class="grid lg:grid-cols-[1.14fr_0.86fr]">
+                    <section class="dark-panel px-6 py-8 text-white sm:px-10 sm:py-10 lg:px-12">
+                        <div class="max-w-3xl">
+                            <div class="inline-flex items-center gap-3 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.32em] text-white/85">
+                                <span class="h-2 w-2 rounded-full bg-amber-300 shadow-[0_0_14px_rgba(252,211,77,0.8)]"></span>
+                                Realtime Vision Console
+                            </div>
+
+                            <div class="premium-brand-card mt-6 inline-flex rounded-[22px] bg-white px-5 py-4 text-slate-900 shadow-soft">
+                                <div>
+                                    <p class="font-display text-2xl text-midnight">Sentinel <span class="text-amber-600">Vision</span></p>
+                                    <p class="mt-1 text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-500">Live Webcam Detection</p>
+                                </div>
+                            </div>
+
+                            <h1 class="mt-10 max-w-2xl font-display text-4xl leading-tight text-white sm:text-5xl xl:text-[3.85rem] xl:leading-[1.04]">
+                                See every frame through a cleaner operator interface.
+                            </h1>
+                            <p class="mt-5 max-w-2xl text-sm leading-7 text-slate-300 sm:text-base">
+                                The layout follows your reference style while focusing this page strictly on live webcam detection. Still-image analysis now lives on its own dedicated page.
+                            </p>
+                        </div>
+
+                        <div class="mt-8 grid gap-4 xl:grid-cols-2">
+                            <article class="premium-dark-card premium-card-hover rounded-[24px] border border-white/10 bg-white/[0.08] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] backdrop-blur-sm">
+                                <p class="text-[11px] font-semibold uppercase tracking-[0.3em] text-amber-200">Active Mode</p>
+                                <p id="selectedModeDisplay" class="mt-3 text-xl font-semibold text-white">{{ active_model_label }}</p>
+                                <p class="mt-3 text-sm leading-7 text-slate-300">
+                                    Switch between the full Phase 1 mode and focused face, emotion, human, or object detection views without changing the page structure.
+                                </p>
+                            </article>
+
+                            <article class="premium-dark-card premium-card-hover rounded-[24px] border border-white/10 bg-white/[0.08] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] backdrop-blur-sm">
+                                <p class="text-[11px] font-semibold uppercase tracking-[0.3em] text-sky-200">Review Flow</p>
+                                <p class="mt-3 text-xl font-semibold text-white">Separate page for image detection</p>
+                                <p class="mt-3 text-sm leading-7 text-slate-300">
+                                    Use this page for realtime webcam monitoring, then jump to the image-detection page when you want to upload and inspect still frames.
+                                </p>
+                            </article>
+                        </div>
+
+                        <div class="mt-8">
+                            <div class="flex flex-col gap-4 pb-4 sm:flex-row sm:items-end sm:justify-between">
+                                <div>
+                                    <p class="text-[11px] font-semibold uppercase tracking-[0.3em] text-slate-300">Live Monitor</p>
+                                    <h2 class="mt-2 font-display text-2xl text-white sm:text-3xl">Realtime workspace</h2>
+                                </div>
+                                <div class="premium-section-badge inline-flex items-center rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-200">
+                                    Operator view
+                                </div>
+                            </div>
+
+                            <div id="stageFrame" class="stage-frame relative aspect-[4/3] w-full overflow-hidden rounded-[30px] bg-[#07101f] shadow-[0_24px_60px_rgba(2,8,23,0.34)]">
+                                <video id="video" autoplay muted playsinline class="h-full w-full object-cover"></video>
+                                <canvas id="overlay" class="absolute inset-0 h-full w-full"></canvas>
+
+                                <div id="videoPlaceholder" class="absolute inset-0 flex flex-col items-center justify-center bg-[#09101f]/82 px-6 text-center transition duration-300">
+                                    <div class="flex h-16 w-16 items-center justify-center rounded-[22px] border border-white/10 bg-white/5 shadow-soft">
+                                        <div class="h-8 w-8 rounded-[14px] border border-skycore/75"></div>
+                                    </div>
+                                    <p class="mt-5 font-display text-xl text-white">Camera feed idle</p>
+                                    <p class="mt-3 max-w-sm text-sm leading-6 text-slate-300">
+                                        Start detection to request webcam access and stream frames into the selected detector.
+                                    </p>
+                                </div>
+
+                                <div class="pointer-events-none absolute inset-x-5 top-5 flex items-center justify-between gap-3">
+                                    <div class="premium-section-badge rounded-full border border-white/10 bg-[#08101f]/70 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.28em] text-skycore">
+                                        Live feed
+                                    </div>
+                                    <div class="flex items-center gap-2">
+                                        <button id="fullscreenBtn" type="button" class="pointer-events-auto inline-flex items-center rounded-full border border-white/10 bg-[#08101f]/78 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-100 transition hover:border-skycore/55 hover:text-skycore focus:outline-none focus:ring-2 focus:ring-skycore/45">
+                                            Full Screen
+                                        </button>
+                                        <div class="premium-section-badge rounded-full border border-white/10 bg-[#08101f]/70 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.28em] text-amber-200">
+                                            Frame overlay
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="scan-line pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-skycore/80 to-transparent"></div>
+                            </div>
+
+                            <div class="premium-dark-card mt-5 rounded-[28px] border border-white/10 bg-white/[0.06] p-5 backdrop-blur-sm">
+                                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                    <div>
+                                        <p class="text-[11px] font-semibold uppercase tracking-[0.3em] text-slate-300">Live Detections</p>
+                                        <p class="mt-2 text-sm leading-6 text-slate-300">
+                                            Current frame results are listed here while the overlay stays on the video.
+                                        </p>
+                                    </div>
+                                    <div class="premium-section-badge rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-200">
+                                        Below screen
+                                    </div>
+                                </div>
+
+                                <div id="liveDetectionFeed" class="mt-5 min-h-[132px]"></div>
+                            </div>
+                        </div>
+
+                        <div class="mt-6 grid gap-4 md:grid-cols-3">
+                            <article class="premium-dark-card premium-card-hover rounded-[24px] border border-white/10 bg-white/[0.06] p-5 backdrop-blur-sm">
+                                <p class="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-300">Visual Hierarchy</p>
+                                <p class="mt-3 text-sm leading-7 text-slate-300">
+                                    The darker stage keeps the video feed visually dominant while the right panel holds the operational controls.
+                                </p>
+                            </article>
+
+                            <article class="premium-dark-card premium-card-hover rounded-[24px] border border-white/10 bg-white/[0.06] p-5 backdrop-blur-sm">
+                                <p class="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-300">Client Overlay</p>
+                                <p class="mt-3 text-sm leading-7 text-slate-300">
+                                    Bounding boxes render in the browser so the webcam stream stays clean and responsive during live monitoring.
+                                </p>
+                            </article>
+
+                            <article class="premium-dark-card premium-card-hover rounded-[24px] border border-white/10 bg-white/[0.06] p-5 backdrop-blur-sm">
+                                <p class="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-300">Review Ready</p>
+                                <p class="mt-3 text-sm leading-7 text-slate-300">
+                                    Still-image detection has its own page now, so webcam monitoring stays uncluttered during live use.
+                                </p>
+                            </article>
+                        </div>
+
+                        <div class="mt-6 space-y-4 text-sm text-slate-200">
+                            <div class="flex items-start gap-3">
+                                <span class="mt-2 h-2.5 w-2.5 rounded-full bg-amber-300"></span>
+                                <p>Phase 1 mode now follows a strict frame-to-objects-to-humans-to-faces-to-emotions pipeline with per-human summaries.</p>
+                            </div>
+                            <div class="flex items-start gap-3">
+                                <span class="mt-2 h-2.5 w-2.5 rounded-full bg-sky-300"></span>
+                                <p>Live requests keep a one-second cadence so the interface stays readable while the backend runs inference.</p>
+                            </div>
+                            <div class="flex items-start gap-3">
+                                <span class="mt-2 h-2.5 w-2.5 rounded-full bg-emerald-300"></span>
+                                <p>Still-image uploads stay in the same design language and open in a full review layout after processing.</p>
+                            </div>
+                        </div>
+                    </section>
+                    <section class="light-panel px-6 py-8 text-slate-900 sm:px-10 sm:py-10 lg:px-12">
+                        <p class="text-xs font-semibold uppercase tracking-[0.32em] text-amber-600">Control Center</p>
+                        <h2 class="mt-5 font-display text-4xl text-midnight sm:text-[3.1rem] sm:leading-[1.05]">Run detection</h2>
+                        <p class="mt-4 max-w-lg text-sm leading-7 text-slate-600 sm:text-base">
+                            Choose the active mode, start or stop webcam capture, then upload a still image for the dedicated annotated result page.
+                        </p>
+
+                        {% if model_load_errors %}
+                        <div class="mt-6 rounded-[24px] border border-rose-200 bg-rose-50 px-5 py-4">
+                            <p class="text-[11px] font-semibold uppercase tracking-[0.32em] text-rose-500">Model Load Errors</p>
+                            <div class="mt-3 space-y-2 text-sm leading-6 text-rose-700">
+                                {% for model_key, error_message in model_load_errors.items() %}
+                                <p><span class="font-semibold text-rose-800">{{ model_key }}</span>: {{ error_message }}</p>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        <div class="premium-light-card mt-8 rounded-[30px] border border-slate-200/80 bg-white/70 p-5 shadow-soft backdrop-blur">
+                            <div class="flex items-start justify-between gap-4">
+                                <div>
+                                    <p class="text-[11px] font-semibold uppercase tracking-[0.32em] text-slate-500">Live Pipeline</p>
+                                    <p id="cameraState" class="mt-3 font-display text-2xl text-midnight">Standby</p>
+                                    <p id="pipelineState" class="mt-2 max-w-md text-sm leading-6 text-slate-600">Waiting for camera permission</p>
+                                </div>
+                                <div class="premium-neutral-pill flex items-center gap-3 rounded-full px-3 py-2 shadow-sm">
+                                    <span id="livePulse" class="live-pulse pulse-idle"></span>
+                                    <span class="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-500">Live</span>
+                                </div>
+                            </div>
+
+                            <div id="statusMessage" class="mt-5 min-h-[88px]"></div>
+                        </div>
+
+                        <div class="mt-6 space-y-4">
+                            <label class="block">
+                                <span class="text-[11px] font-semibold uppercase tracking-[0.32em] text-slate-500">Detection Mode</span>
+                                <div class="relative mt-3">
+                                    <select id="modelSelect" class="control-field appearance-none pr-12">
+                                        {% for mode in available_detection_modes %}
+                                        <option value="{{ mode.key }}" {% if mode.key == selected_mode %}selected{% endif %}>{{ mode.label }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    <span class="pointer-events-none absolute inset-y-0 right-4 flex items-center text-slate-400">
+                                        <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                            <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.512a.75.75 0 01-1.08 0L5.21 8.27a.75.75 0 01.02-1.06z" clip-rule="evenodd"></path>
+                                        </svg>
+                                    </span>
+                                </div>
+                            </label>
+
+                            <div class="grid gap-3 2xl:grid-cols-2">
+                                <button id="startBtn" type="button" class="liquid-button liquid-button--session-control liquid-button--warm w-full">
+                                    <span class="liquid-button__orb" aria-hidden="true"></span>
+                                    <span class="liquid-button__label">Start Detection</span>
+                                    <span class="liquid-button__meta" aria-hidden="true">
+                                        <span></span><span></span><span></span>
+                                    </span>
+                                </button>
+                                <button id="stopBtn" type="button" class="liquid-button liquid-button--session-control liquid-button--neutral w-full" disabled>
+                                    <span class="liquid-button__orb liquid-button__orb--stop" aria-hidden="true"></span>
+                                    <span class="liquid-button__label">Stop Session</span>
+                                    <span class="liquid-button__meta" aria-hidden="true">
+                                        <span></span><span></span><span></span>
+                                    </span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="mt-6 grid gap-4 sm:grid-cols-3">
+                            <div class="premium-stat-card rounded-[24px] border border-slate-200 bg-white/75 p-4 shadow-sm">
+                                <p class="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-500">Detections</p>
+                                <p id="detectionCountValue" class="mt-3 font-display text-4xl text-midnight">00</p>
+                                <p id="detectionCountLabel" class="mt-2 text-sm leading-6 text-slate-500">Current frame</p>
+                            </div>
+
+                            <div class="premium-stat-card rounded-[24px] border border-slate-200 bg-white/75 p-4 shadow-sm">
+                                <p class="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-500">Session Mode</p>
+                                <p id="modeValue" class="mt-3 font-display text-2xl text-midnight">Standby</p>
+                                <p class="mt-2 text-sm leading-6 text-slate-500">Updates when webcam access is active</p>
+                            </div>
+
+                            <div class="premium-stat-card premium-stat-card--accent rounded-[24px] border border-amber-200 bg-amber-50 p-4 shadow-sm">
+                                <p class="text-[11px] font-semibold uppercase tracking-[0.28em] text-amber-700">Last Sync</p>
+                                <p id="lastSyncValue" class="mt-3 font-display text-2xl text-midnight">--:--:--</p>
+                                <p class="mt-2 text-sm leading-6 text-slate-600">Updated after each successful inference</p>
+                            </div>
+                        </div>
+
+                        <div class="soft-rule mt-8"></div>
+
+                        <div class="premium-cta-card mt-8 rounded-[28px] border border-slate-200 bg-[#16223c] p-5 text-white shadow-[0_20px_48px_rgba(15,23,42,0.28)]">
+                            <div class="flex items-start justify-between gap-4">
+                                <div>
+                                    <p class="text-[11px] font-semibold uppercase tracking-[0.32em] text-slate-300">Image Detection</p>
+                                    <p class="mt-3 font-display text-xl">Open the dedicated upload page for still images.</p>
+                                    <p class="mt-3 max-w-lg text-sm leading-6 text-slate-300">
+                                        Image upload, annotated preview, and detection summaries are now isolated from the live webcam console.
+                                    </p>
+                                </div>
+                                <div class="premium-link-chip rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-300">
+                                    Separate page
+                                </div>
+                            </div>
+
+                            <div class="mt-5 grid gap-3 sm:grid-cols-2">
+                                <div class="premium-dark-subcard rounded-[20px] border border-white/10 bg-white/5 p-4">
+                                    <p class="text-[11px] uppercase tracking-[0.28em] text-slate-400">Current mode</p>
+                                    <p id="imagePageModeDisplay" class="mt-2 text-sm font-semibold text-white">{{ active_model_label }}</p>
+                                </div>
+                                <div class="premium-dark-subcard rounded-[20px] border border-white/10 bg-white/5 p-4">
+                                    <p class="text-[11px] uppercase tracking-[0.28em] text-slate-400">Page contents</p>
+                                    <p class="mt-2 text-sm font-semibold text-white">Mode selector, image upload, preview, detections</p>
+                                </div>
+                            </div>
+
+                            <a id="imageDetectionLink" href="{{ url_for('image_detection', mode=selected_mode) }}" class="liquid-button liquid-button--dark mt-5 w-full">
+                                <span class="liquid-button__orb" aria-hidden="true"></span>
+                                <span class="liquid-button__label">Go To Image Detection</span>
+                                <span class="liquid-button__meta" aria-hidden="true">
+                                    <span></span><span></span><span></span>
+                                </span>
+                            </a>
+                        </div>
+                    </section>
+                </div>
+            </main>
+        </div>
+    </div>
+    <script>
+        const video = document.getElementById('video');
+        const overlay = document.getElementById('overlay');
+        const overlayCtx = overlay.getContext('2d');
+        const stageFrame = document.getElementById('stageFrame');
+        const statusMessage = document.getElementById('statusMessage');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const cameraState = document.getElementById('cameraState');
+        const pipelineState = document.getElementById('pipelineState');
+        const detectionCountValue = document.getElementById('detectionCountValue');
+        const detectionCountLabel = document.getElementById('detectionCountLabel');
+        const modeValue = document.getElementById('modeValue');
+        const lastSyncValue = document.getElementById('lastSyncValue');
+        const livePulse = document.getElementById('livePulse');
+        const videoPlaceholder = document.getElementById('videoPlaceholder');
+        const liveDetectionFeed = document.getElementById('liveDetectionFeed');
+        const modelSelect = document.getElementById('modelSelect');
+        const selectedModeDisplay = document.getElementById('selectedModeDisplay');
+        const imagePageModeDisplay = document.getElementById('imagePageModeDisplay');
+        const imageDetectionLink = document.getElementById('imageDetectionLink');
+        const fullscreenBtn = document.getElementById('fullscreenBtn');
+
+        let stream;
+        let intervalId;
+        let animationId;
+        let detectionActive = false;
+        let detectionInFlight = false;
+        let currentDetections = [];
+        let currentFrameNotes = [];
+        let currentFrameData = {
+            objects: [],
+            humans: [],
+            faces: [],
+            emotions: [],
+            notes: []
+        };
+        let sourceFrameWidth = 640;
+        let sourceFrameHeight = 480;
+        const captureCanvas = document.createElement('canvas');
+        const captureCtx = captureCanvas.getContext('2d');
+
+        const statusStyles = {
+            info: {
+                label: 'System',
+                tone: 'status-info'
+            },
+            success: {
+                label: 'Live',
+                tone: 'status-success'
+            },
+            warning: {
+                label: 'Paused',
+                tone: 'status-warning'
+            },
+            danger: {
+                label: 'Alert',
+                tone: 'status-danger'
+            }
+        };
+        const poseSkeletonEdges = [
+            ['nose', 'left_eye'],
+            ['nose', 'right_eye'],
+            ['left_eye', 'left_ear'],
+            ['right_eye', 'right_ear'],
+            ['left_shoulder', 'right_shoulder'],
+            ['left_shoulder', 'left_elbow'],
+            ['left_elbow', 'left_wrist'],
+            ['right_shoulder', 'right_elbow'],
+            ['right_elbow', 'right_wrist'],
+            ['left_shoulder', 'left_hip'],
+            ['right_shoulder', 'right_hip'],
+            ['left_hip', 'right_hip'],
+            ['left_hip', 'left_knee'],
+            ['left_knee', 'left_ankle'],
+            ['right_hip', 'right_knee'],
+            ['right_knee', 'right_ankle']
+        ];
+
+        function showStatus(message, type = 'info') {
+            const style = statusStyles[type] || statusStyles.info;
+            statusMessage.innerHTML = `
+                <div class="status-card ${style.tone}">
+                    <div class="flex items-start gap-3">
+                        <span class="status-dot"></span>
+                        <div>
+                            <p class="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-500">${style.label}</p>
+                            <p class="mt-1 text-sm leading-6 text-slate-700">${message}</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function setLiveState(label, detail, tone = 'idle', feedVisible = false) {
+            const pulseClasses = {
+                idle: 'pulse-idle',
+                info: 'pulse-info',
+                success: 'pulse-success',
+                warning: 'pulse-warning',
+                danger: 'pulse-danger'
+            };
+
+            cameraState.textContent = label;
+            pipelineState.textContent = detail;
+            livePulse.className = `live-pulse ${pulseClasses[tone] || pulseClasses.idle}`;
+            modeValue.textContent = feedVisible ? 'Live' : 'Standby';
+            videoPlaceholder.classList.toggle('opacity-0', feedVisible);
+            videoPlaceholder.classList.toggle('pointer-events-none', feedVisible);
+        }
+
+        function setDetectionCount(count) {
+            detectionCountValue.textContent = String(count).padStart(2, '0');
+            detectionCountLabel.textContent = count === 1 ? 'Detection in current frame' : 'Detections in current frame';
+        }
+
+        function escapeHtml(value) {
+            return String(value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function formatConfidence(value) {
+            return typeof value === 'number' ? `${Math.round(value * 100)}%` : '--';
+        }
+
+        function titleCase(value) {
+            return String(value || '')
+                .replace(/[_-]+/g, ' ')
+                .replace(/\b\w/g, char => char.toUpperCase());
+        }
+
+        function renderField(label, value, tone = 'text-white') {
+            return `
+                <div class="premium-feed-field rounded-[18px] border border-white/10 bg-white/[0.04] px-3 py-2">
+                    <p class="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">${escapeHtml(label)}</p>
+                    <p class="mt-1 text-sm font-semibold ${tone}">${escapeHtml(value)}</p>
+                </div>
+            `;
+        }
+
+        function drawPoseOverlay(det, boxLineWidth) {
+            const keypoints = Array.isArray(det.keypoints)
+                ? det.keypoints.filter(point => point && point.visible)
+                : [];
+
+            if (!keypoints.length) {
+                return;
+            }
+
+            const pointMap = new Map(keypoints.map(point => [String(point.name), point]));
+            overlayCtx.strokeStyle = 'rgba(255, 205, 86, 0.95)';
+            overlayCtx.lineWidth = Math.max(1.35, boxLineWidth * 0.9);
+            poseSkeletonEdges.forEach(([startName, endName]) => {
+                const startPoint = pointMap.get(startName);
+                const endPoint = pointMap.get(endName);
+                if (!startPoint || !endPoint) {
+                    return;
+                }
+
+                overlayCtx.beginPath();
+                overlayCtx.moveTo(startPoint.x, startPoint.y);
+                overlayCtx.lineTo(endPoint.x, endPoint.y);
+                overlayCtx.stroke();
+            });
+
+            overlayCtx.fillStyle = '#ffb000';
+            keypoints.forEach(point => {
+                overlayCtx.beginPath();
+                overlayCtx.arc(point.x, point.y, Math.max(2.75, boxLineWidth * 1.6), 0, Math.PI * 2);
+                overlayCtx.fill();
+            });
+
+            overlayCtx.strokeStyle = '#8fd4ff';
+            overlayCtx.lineWidth = boxLineWidth;
+            overlayCtx.fillStyle = '#8fd4ff';
+        }
+
+        function renderDetectionFeed(frameData = null, notes = []) {
+            if (!liveDetectionFeed) {
+                return;
+            }
+
+            const data = frameData || {};
+            const humans = Array.isArray(data.humans) ? data.humans : [];
+            const faces = Array.isArray(data.faces) ? data.faces : [];
+            const emotions = Array.isArray(data.emotions) ? data.emotions : [];
+            const objects = Array.isArray(data.objects) ? data.objects : [];
+            const effectiveNotes = Array.isArray(data.notes) && data.notes.length ? data.notes : notes;
+
+            if (!humans.length && !faces.length && !objects.length) {
+                const noteMarkup = effectiveNotes.length
+                    ? `<div class="mt-4 space-y-2">${effectiveNotes.map(note => `<p class="text-sm leading-6 text-slate-300">${escapeHtml(note)}</p>`).join('')}</div>`
+                    : '<p class="mt-4 text-sm leading-6 text-slate-300">No detections are being shown yet. Start the session to stream live results here.</p>';
+
+                liveDetectionFeed.innerHTML = `
+                    <div class="premium-feed-empty rounded-[22px] border border-dashed border-white/15 bg-black/10 px-5 py-6">
+                        <p class="font-display text-xl text-white">Waiting for live detections</p>
+                        ${noteMarkup}
+                    </div>
+                `;
+                return;
+            }
+
+            const humanCards = humans.map((human, index) => {
+                const personLabel = `Person ${index + 1}`;
+                const linkedFaces = faces.filter(face => face.parent_human_id === human.id);
+                const primaryFace = linkedFaces[0] || null;
+                const linkedEmotion = primaryFace
+                    ? emotions.find(emotion => emotion.face_id === primaryFace.id)
+                    : null;
+                const summary = human.summary || {};
+                const humanBox = human.bbox
+                    ? `x:${human.bbox.x}, y:${human.bbox.y}, w:${human.bbox.width}, h:${human.bbox.height}`
+                    : '--';
+                const faceLabel = summary.face || (primaryFace ? 'Yes' : 'No');
+                const emotionLabel = summary.emotion || (linkedEmotion ? titleCase(linkedEmotion.label) : 'N/A');
+                const actionLabel = summary.action || 'N/A';
+                const poseLabel = typeof human.visible_keypoint_count === 'number' && typeof human.keypoint_count === 'number'
+                    ? `${human.visible_keypoint_count} / ${human.keypoint_count} points`
+                    : 'N/A';
+                const faceId = primaryFace ? primaryFace.id : 'Not mapped';
+
+                return `
+                    <article class="premium-feed-card rounded-[22px] border border-white/10 bg-black/10 p-4">
+                        <div class="flex items-start justify-between gap-3">
+                            <div>
+                                <p class="text-lg font-semibold text-white">${escapeHtml(personLabel)}</p>
+                                <p class="mt-1 text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-400">${escapeHtml(human.id)}</p>
+                            </div>
+                            <div class="premium-confidence-pill rounded-full border border-skycore/20 bg-skycore/10 px-3 py-1 text-xs font-semibold text-skycore">
+                                ${formatConfidence(human.confidence)}
+                            </div>
+                        </div>
+                        <div class="mt-4 grid gap-3 sm:grid-cols-2">
+                            ${renderField('Human Box', humanBox)}
+                            ${renderField('Face', faceLabel, faceLabel === 'Yes' ? 'text-sky-200' : 'text-slate-300')}
+                            ${renderField('Emotion', emotionLabel, emotionLabel !== 'N/A' ? 'text-amber-200' : 'text-slate-300')}
+                            ${renderField('Action', actionLabel, actionLabel !== 'N/A' ? 'text-emerald-200' : 'text-slate-300')}
+                            ${renderField('Pose', poseLabel, poseLabel !== 'N/A' ? 'text-cyan-200' : 'text-slate-300')}
+                            ${renderField('Mapped Face', faceId, primaryFace ? 'text-sky-200' : 'text-slate-300')}
+                        </div>
+                    </article>
+                `;
+            }).join('');
+
+            const standaloneFaces = faces
+                .filter(face => !face.parent_human_id)
+                .map((face, index) => {
+                    const linkedEmotion = emotions.find(emotion => emotion.face_id === face.id);
+                    const faceBox = face.bbox
+                        ? `x:${face.bbox.x}, y:${face.bbox.y}, w:${face.bbox.width}, h:${face.bbox.height}`
+                        : '--';
+                    return `
+                        <article class="premium-feed-card rounded-[22px] border border-white/10 bg-black/10 p-4">
+                            <div class="flex items-start justify-between gap-3">
+                                <div>
+                                    <p class="text-base font-semibold text-white">${escapeHtml(`Face ${index + 1}`)}</p>
+                                    <p class="mt-1 text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-400">${escapeHtml(face.id)}</p>
+                                </div>
+                                <div class="premium-confidence-pill rounded-full border border-skycore/20 bg-skycore/10 px-3 py-1 text-xs font-semibold text-skycore">
+                                    ${formatConfidence(face.confidence)}
+                                </div>
+                            </div>
+                            <div class="mt-4 grid gap-3 sm:grid-cols-2">
+                                ${renderField('Face Box', faceBox)}
+                                ${renderField('Emotion', linkedEmotion ? `${titleCase(linkedEmotion.label)} (${formatConfidence(linkedEmotion.confidence)})` : 'N/A', linkedEmotion ? 'text-amber-200' : 'text-slate-300')}
+                            </div>
+                        </article>
+                    `;
+                }).join('');
+
+            const objectCards = objects
+                .filter(objectItem => !['person', 'human'].includes(String(objectItem.label || '').toLowerCase()))
+                .map((objectItem, index) => {
+                const box = objectItem.bbox
+                    ? `x:${objectItem.bbox.x}, y:${objectItem.bbox.y}, w:${objectItem.bbox.width}, h:${objectItem.bbox.height}`
+                    : '--';
+                return `
+                    <article class="premium-feed-card rounded-[22px] border border-white/10 bg-black/10 p-4">
+                        <div class="flex items-start justify-between gap-3">
+                            <div>
+                                <p class="text-base font-semibold text-white">${escapeHtml(`Object ${index + 1}`)}</p>
+                                <p class="mt-1 text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-400">${escapeHtml(titleCase(objectItem.label))}</p>
+                            </div>
+                            <div class="premium-confidence-pill rounded-full border border-skycore/20 bg-skycore/10 px-3 py-1 text-xs font-semibold text-skycore">
+                                ${formatConfidence(objectItem.confidence)}
+                            </div>
+                        </div>
+                        <div class="mt-4">
+                            ${renderField('Object Box', box)}
+                        </div>
+                    </article>
+                `;
+            }).join('');
+
+            const noteMarkup = effectiveNotes.length
+                ? `<div class="premium-feed-note mt-4 rounded-[22px] border border-white/10 bg-white/[0.04] px-4 py-3">${effectiveNotes.map(note => `<p class="text-sm leading-6 text-slate-300">${escapeHtml(note)}</p>`).join('')}</div>`
+                : '';
+
+            liveDetectionFeed.innerHTML = `
+                ${humanCards ? `
+                    <div>
+                        <p class="mb-3 text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-400">People Mapping</p>
+                        <div class="grid gap-3 xl:grid-cols-2">${humanCards}</div>
+                    </div>
+                ` : ''}
+                ${standaloneFaces ? `
+                    <div class="mt-4">
+                        <p class="mb-3 text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-400">Standalone Faces</p>
+                        <div class="grid gap-3 xl:grid-cols-2">${standaloneFaces}</div>
+                    </div>
+                ` : ''}
+                ${objectCards ? `
+                    <div class="mt-4">
+                        <p class="mb-3 text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-400">Objects In Frame</p>
+                        <div class="grid gap-3 xl:grid-cols-2">${objectCards}</div>
+                    </div>
+                ` : ''}
+                ${noteMarkup}
+            `;
+        }
+
+        function getSelectedModelLabel() {
+            return modelSelect.options[modelSelect.selectedIndex]?.text || 'Selected mode';
+        }
+
+        function syncSelectedModel() {
+            const label = getSelectedModelLabel();
+
+            if (selectedModeDisplay) {
+                selectedModeDisplay.textContent = label;
+            }
+
+            if (imagePageModeDisplay) {
+                imagePageModeDisplay.textContent = label;
+            }
+
+            if (imageDetectionLink) {
+                imageDetectionLink.href = `/image-detection?mode=${encodeURIComponent(modelSelect.value)}`;
+            }
+        }
+
+        function updateLastSync() {
+            lastSyncValue.textContent = new Date().toLocaleTimeString([], {
+                hour12: true,
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+        }
+
+        function getFullscreenElement() {
+            return document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement || null;
+        }
+
+        function syncFullscreenViewport() {
+            if (!stageFrame) {
+                return;
+            }
+
+            if (getFullscreenElement() !== stageFrame) {
+                stageFrame.style.removeProperty('--fullscreen-content-width');
+                stageFrame.style.removeProperty('--fullscreen-content-height');
+                return;
+            }
+
+            const aspectRatio = (sourceFrameWidth > 0 && sourceFrameHeight > 0)
+                ? sourceFrameWidth / sourceFrameHeight
+                : (4 / 3);
+            const viewportWidth = Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1);
+            const viewportHeight = Math.max(1, window.innerHeight || document.documentElement.clientHeight || 1);
+
+            let contentWidth = viewportWidth;
+            let contentHeight = contentWidth / aspectRatio;
+
+            if (contentHeight > viewportHeight) {
+                contentHeight = viewportHeight;
+                contentWidth = contentHeight * aspectRatio;
+            }
+
+            stageFrame.style.setProperty('--fullscreen-content-width', `${Math.round(contentWidth)}px`);
+            stageFrame.style.setProperty('--fullscreen-content-height', `${Math.round(contentHeight)}px`);
+        }
+
+        function syncFullscreenState() {
+            if (!fullscreenBtn || !stageFrame) {
+                return;
+            }
+
+            const isFullscreen = getFullscreenElement() === stageFrame;
+            fullscreenBtn.textContent = isFullscreen ? 'Exit Full Screen' : 'Full Screen';
+            fullscreenBtn.setAttribute('aria-pressed', isFullscreen ? 'true' : 'false');
+            syncFullscreenViewport();
+            syncOverlaySize();
+            if (currentDetections.length > 0) {
+                drawDetections(currentDetections);
+            }
+        }
+
+        async function toggleFullscreen() {
+            if (!stageFrame) {
+                return;
+            }
+
+            try {
+                if (getFullscreenElement() === stageFrame) {
+                    const exitFullscreen = document.exitFullscreen || document.webkitExitFullscreen || document.msExitFullscreen;
+                    if (exitFullscreen) {
+                        await Promise.resolve(exitFullscreen.call(document));
+                    }
+                    return;
+                }
+
+                const requestFullscreen = stageFrame.requestFullscreen || stageFrame.webkitRequestFullscreen || stageFrame.msRequestFullscreen;
+                if (!requestFullscreen) {
+                    showStatus('Fullscreen is not supported in this browser.', 'warning');
+                    return;
+                }
+
+                await Promise.resolve(requestFullscreen.call(stageFrame));
+            } catch (err) {
+                showStatus(`Unable to change fullscreen mode: ${err.message}`, 'danger');
+            }
+        }
+
+        function waitForVideoMetadata() {
+            if (video.readyState >= 1) {
+                return Promise.resolve();
+            }
+
+            return new Promise(resolve => {
+                video.addEventListener('loadedmetadata', resolve, { once: true });
+            });
+        }
+
+        function syncOverlaySize() {
+            const rect = overlay.getBoundingClientRect();
+            const width = Math.max(1, Math.round(rect.width));
+            const height = Math.max(1, Math.round(rect.height));
+
+            if (overlay.width !== width || overlay.height !== height) {
+                overlay.width = width;
+                overlay.height = height;
+            }
+        }
+
+        function stopDetection(message = 'Detection stopped. The live session is now idle.', type = 'warning') {
+            detectionActive = false;
+            detectionInFlight = false;
+
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+
+            clearInterval(intervalId);
+            intervalId = null;
+            cancelAnimationFrame(animationId);
+            animationId = null;
+            video.pause();
+            video.srcObject = null;
+            overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+            currentDetections = [];
+            currentFrameNotes = [];
+            currentFrameData = {
+                objects: [],
+                humans: [],
+                faces: [],
+                emotions: [],
+                notes: []
+            };
+            setDetectionCount(0);
+            renderDetectionFeed(currentFrameData, [message]);
+            setLiveState('Standby', 'Waiting for camera permission', type === 'danger' ? 'danger' : 'warning', false);
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            showStatus(message, type);
+        }
+        startBtn.addEventListener('click', async () => {
+            if (detectionActive) {
+                return;
+            }
+
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                setLiveState('Unsupported', 'This browser does not expose webcam APIs', 'danger', false);
+                showStatus('Webcam is not supported by this browser. Use a recent version of Chrome, Edge, or Firefox.', 'danger');
+                return;
+            }
+
+            try {
+                setLiveState('Initializing', 'Requesting camera access', 'info', false);
+                showStatus(`Requesting webcam access and preparing ${getSelectedModelLabel().toLowerCase()}...`, 'info');
+                stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
+                video.srcObject = stream;
+                const metadataReady = waitForVideoMetadata();
+                await video.play();
+                await metadataReady;
+
+                sourceFrameWidth = video.videoWidth || 640;
+                sourceFrameHeight = video.videoHeight || 480;
+                captureCanvas.width = sourceFrameWidth;
+                captureCanvas.height = sourceFrameHeight;
+                syncFullscreenViewport();
+                syncOverlaySize();
+
+                detectionActive = true;
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                setLiveState('Monitoring', 'Live stream connected and detector running', 'success', true);
+                showStatus(`Webcam active. Frames are now being captured and sent to ${getSelectedModelLabel().toLowerCase()}.`, 'success');
+
+                drawVideo();
+                captureAndDetect();
+                intervalId = setInterval(captureAndDetect, 1000);
+            } catch (err) {
+                console.error('Error accessing webcam:', err);
+                stopDetection('Unable to access the webcam. Check browser permissions and confirm no other app is locking the camera.', 'danger');
+            }
+        });
+
+        stopBtn.addEventListener('click', () => {
+            stopDetection();
+        });
+
+        function drawVideo() {
+            if (!detectionActive) {
+                return;
+            }
+
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                captureCtx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+            }
+
+            animationId = requestAnimationFrame(drawVideo);
+        }
+
+        function captureAndDetect() {
+            if (!detectionActive || detectionInFlight || !video || video.readyState !== video.HAVE_ENOUGH_DATA) {
+                return;
+            }
+
+            detectionInFlight = true;
+            const dataURL = captureCanvas.toDataURL('image/jpeg', 0.7);
+            syncOverlaySize();
+
+            fetch('/detect', {
+                method: 'POST',
+                body: JSON.stringify({
+                    image: dataURL,
+                    detection_mode: modelSelect.value,
+                    display_width: overlay.width,
+                    display_height: overlay.height
+                }),
+                headers: { 'Content-Type': 'application/json' }
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (!detectionActive) {
+                    return;
+                }
+
+                if (data.error) {
+                    setLiveState('Detector Error', 'The backend returned an error', 'danger', true);
+                    showStatus(`Backend error: ${data.error}`, 'danger');
+                    return;
+                }
+
+                currentDetections = data.detections || [];
+                currentFrameNotes = data.notes || [];
+                currentFrameData = {
+                    objects: data.objects || [],
+                    humans: data.humans || [],
+                    faces: data.faces || [],
+                    emotions: data.emotions || [],
+                    notes: currentFrameNotes
+                };
+                const activeModelLabel = data.model_label || getSelectedModelLabel();
+                drawDetections(currentDetections);
+                setDetectionCount(currentDetections.length);
+                renderDetectionFeed(currentFrameData, currentFrameNotes);
+                updateLastSync();
+                setLiveState('Monitoring', 'Live stream connected and detector running', 'success', true);
+
+                const count = currentDetections.length;
+                showStatus(
+                    count > 0
+                        ? `${count} detection${count !== 1 ? 's were' : ' was'} produced by ${activeModelLabel.toLowerCase()} in the current frame.`
+                        : `No detections produced by ${activeModelLabel.toLowerCase()} in the current frame.`,
+                    count > 0 ? 'success' : 'info'
+                );
+            })
+            .catch(err => {
+                console.error('Detection error:', err);
+                if (detectionActive) {
+                    currentFrameData = {
+                        objects: [],
+                        humans: [],
+                        faces: [],
+                        emotions: [],
+                        notes: [`Detection failed: ${err.message}`]
+                    };
+                    renderDetectionFeed(currentFrameData, currentFrameData.notes);
+                    setLiveState('Connection Issue', 'Unable to complete the detection request', 'danger', true);
+                    showStatus(`Detection failed: ${err.message}`, 'danger');
+                }
+            })
+            .finally(() => {
+                detectionInFlight = false;
+            });
+        }
+
+        function drawDetections(detections) {
+            syncOverlaySize();
+            const displayWidth = overlay.width;
+            const displayHeight = overlay.height;
+            const boxLineWidth = Math.max(1.25, Math.min(2.1, Math.min(displayWidth, displayHeight) / 420));
+            const labelFontSize = Math.max(12, Math.min(15, displayWidth / 72));
+            const labelPaddingX = 8;
+            const labelLineHeight = labelFontSize + 8;
+
+            overlayCtx.clearRect(0, 0, displayWidth, displayHeight);
+            overlayCtx.strokeStyle = '#8fd4ff';
+            overlayCtx.lineWidth = boxLineWidth;
+            overlayCtx.font = `600 ${labelFontSize}px "Manrope", sans-serif`;
+            overlayCtx.fillStyle = '#8fd4ff';
+
+            detections.forEach(det => {
+                const boxX = det.x1;
+                const boxY = det.y1;
+                const boxWidth = det.x2 - det.x1;
+                const boxHeight = det.y2 - det.y1;
+
+                if (boxX + boxWidth < 0 || boxY + boxHeight < 0 || boxX > displayWidth || boxY > displayHeight) {
+                    return;
+                }
+
+                overlayCtx.strokeRect(boxX, boxY, boxWidth, boxHeight);
+                drawPoseOverlay(det, boxLineWidth);
+                const textLines = Array.isArray(det.overlay_lines) && det.overlay_lines.length
+                    ? det.overlay_lines
+                    : [det.overlay_label || det.display_label || `${titleCase(det.label)} (${det.confidence.toFixed(2)})`];
+                const textX = Math.max(10, boxX);
+                const labelBlockHeight = textLines.length * labelLineHeight + 8;
+                const textY = Math.max(labelBlockHeight + 8, boxY - 8);
+                const textWidth = textLines.reduce((maxWidth, line) => Math.max(maxWidth, overlayCtx.measureText(line).width), 0);
+
+                overlayCtx.fillStyle = 'rgba(12, 23, 48, 0.86)';
+                overlayCtx.fillRect(
+                    textX - labelPaddingX,
+                    textY - labelBlockHeight,
+                    textWidth + labelPaddingX * 2,
+                    labelBlockHeight + 4
+                );
+                overlayCtx.strokeStyle = '#8fd4ff';
+                overlayCtx.lineWidth = Math.max(1, boxLineWidth * 0.8);
+                overlayCtx.strokeRect(
+                    textX - labelPaddingX,
+                    textY - labelBlockHeight,
+                    textWidth + labelPaddingX * 2,
+                    labelBlockHeight + 4
+                );
+                overlayCtx.lineWidth = boxLineWidth;
+                overlayCtx.fillStyle = '#8fd4ff';
+                textLines.forEach((line, lineIndex) => {
+                    overlayCtx.fillText(line, textX, textY - labelBlockHeight + (lineIndex + 1) * labelLineHeight - 4);
+                });
+            });
+        }
+
+        window.addEventListener('resize', () => {
+            syncFullscreenViewport();
+            syncOverlaySize();
+            if (currentDetections.length > 0) {
+                drawDetections(currentDetections);
+            }
+        });
+
+        modelSelect.addEventListener('change', () => {
+            syncSelectedModel();
+            showStatus(`${getSelectedModelLabel()} selected for the next detection request.`, 'info');
+        });
+
+        if (fullscreenBtn) {
+            fullscreenBtn.addEventListener('click', toggleFullscreen);
+            document.addEventListener('fullscreenchange', syncFullscreenState);
+            document.addEventListener('webkitfullscreenchange', syncFullscreenState);
+            document.addEventListener('msfullscreenchange', syncFullscreenState);
+            syncFullscreenState();
+        }
+
+        syncSelectedModel();
+        setDetectionCount(0);
+        renderDetectionFeed(currentFrameData, ['Ready for live monitoring. Current frame detections will appear below the webcam screen.']);
+        setLiveState('Standby', 'Waiting for camera permission', 'idle', false);
+        showStatus('Ready for live monitoring. Choose a mode, start detection, or upload a still image to begin analysis.', 'info');
+    </script>
+</body>
+</html>

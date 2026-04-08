@@ -1,0 +1,4 @@
+[submodule "legacy_yolov5"]
+	path = legacy_yolov5
+	url = https://github.com/ultralytics/yolov5.git
+	branch = master

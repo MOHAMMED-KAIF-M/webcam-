@@ -1,0 +1,21 @@
+.venv/
+.sixth/
+.vscode/
+
+__pycache__/
+*.py[cod]
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log
+
+generated_media/
+
+# Legacy or duplicate model exports. The app loads active models from mod/.
+models/
+models1/
+/model.h5
+/model.pt
+/model.safetensors
+/pytorch_model.bin

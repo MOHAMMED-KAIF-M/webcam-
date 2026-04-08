@@ -1,0 +1,11 @@
+Flask==3.1.2
+dill>=0.3.8
+h5py==3.16.0
+opencv-python==4.13.0.92
+torch==2.11.0
+torchvision==0.26.0
+ultralytics==8.4.33
+Pillow>=10.0.1
+numpy>=1.26.0
+transformers==4.57.3
+safetensors==0.7.0
