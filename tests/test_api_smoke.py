@@ -138,6 +138,9 @@ class DetectApiSmokeTests(unittest.TestCase):
         cls.client = webcam_app.app.test_client()
 
     def test_detect_json_face_mode_returns_success(self):
+        if "face" not in webcam_app.AVAILABLE_MODE_KEYS:
+            self.skipTest("Face mode is not available in this environment.")
+
         response = self.client.post(
             "/detect",
             json={
@@ -193,6 +196,47 @@ class DetectApiSmokeTests(unittest.TestCase):
         self.assertEqual(payload["model_label"], "Pose Detection (Keypoint R-CNN)")
         self.assertIn("humans", payload)
         self.assertIsInstance(payload["humans"], list)
+
+    def test_face_emotion_pipeline_requires_human_then_face_before_emotion(self):
+        frame = np.zeros((128, 128, 3), dtype=np.uint8)
+        events = []
+        human_detections = [
+            {
+                "x1": 16,
+                "y1": 12,
+                "x2": 96,
+                "y2": 120,
+                "confidence": 0.91,
+                "label": "person",
+                "source_model": "human",
+            }
+        ]
+
+        def detect_objects_side_effect(_frame, mode="combined"):
+            events.append(f"detect_objects:{mode}")
+            return [dict(det) for det in human_detections]
+
+        def detect_faces_side_effect(_frame):
+            events.append("detect_faces")
+            return []
+
+        with (
+            mock.patch.object(webcam_app, "detect_objects", side_effect=detect_objects_side_effect),
+            mock.patch.object(webcam_app, "detect_faces", side_effect=detect_faces_side_effect),
+            mock.patch.object(webcam_app, "detect_emotions") as detect_emotions,
+        ):
+            payload = webcam_app.run_phase1_pipeline(
+                "face_emotion",
+                frame,
+                display_width=128,
+                display_height=128,
+            )
+
+        self.assertEqual(events, ["detect_objects:human", "detect_faces"])
+        detect_emotions.assert_not_called()
+        self.assertEqual(len(payload["humans"]), 1)
+        self.assertEqual(payload["faces"], [])
+        self.assertEqual(payload["emotions"], [])
 
     def test_action_mode_falls_back_to_pose_when_human_detector_misses(self):
         frame = np.zeros((128, 128, 3), dtype=np.uint8)
@@ -379,12 +423,17 @@ class DetectApiSmokeTests(unittest.TestCase):
         self.assertEqual(filtered_payload["detection_count"], 2)
         self.assertEqual(len(filtered_payload["detections"]), 1)
         self.assertEqual(filtered_payload["detections"][0]["label"], "face")
+        self.assertEqual(filtered_payload["phase1_output"]["humans"][0]["id"], "human_1")
         self.assertEqual(filtered_payload["phase1_output"]["faces"][0]["id"], "face_1")
         self.assertEqual(filtered_payload["phase1_output"]["emotions"], [])
         self.assertEqual(filtered_payload["phase1_output"]["actions"], [])
 
     def test_combined_mode_declares_action_dependency(self):
         self.assertIn("action", webcam_app.DETECTION_MODES["combined"]["models"])
+
+    def test_face_modes_declare_human_dependency(self):
+        self.assertIn("human", webcam_app.DETECTION_MODES["face"]["models"])
+        self.assertIn("human", webcam_app.DETECTION_MODES["face_emotion"]["models"])
 
     def test_video_stride_defaults_allow_longer_processing(self):
         self.assertEqual(webcam_app.resolve_video_inference_stride(360, selected_mode="object"), 4)

@@ -85,6 +85,64 @@
 
 {% include '_liquid_button.css' %}
 {% include '_premium_polish.css' %}
+
+        .video-mapping-shell {
+            border: 1px solid rgba(15, 23, 42, 0.2) !important;
+            background:
+                radial-gradient(circle at 14% 12%, rgba(125, 211, 252, 0.14), transparent 22%),
+                radial-gradient(circle at 88% 10%, rgba(251, 191, 36, 0.1), transparent 18%),
+                linear-gradient(180deg, rgba(15, 23, 42, 0.92) 0%, rgba(30, 41, 59, 0.84) 100%) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.08),
+                0 22px 48px rgba(2, 8, 23, 0.18);
+        }
+
+        .video-mapping-stat,
+        .video-mapping-card,
+        .video-mapping-metric,
+        .video-mapping-note {
+            backdrop-filter: blur(18px) saturate(145%);
+            -webkit-backdrop-filter: blur(18px) saturate(145%);
+        }
+
+        .video-mapping-stat {
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            background: linear-gradient(180deg, rgba(71, 85, 105, 0.46) 0%, rgba(30, 41, 59, 0.36) 100%);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+        }
+
+        .video-mapping-card {
+            border: 1px solid rgba(148, 163, 184, 0.16);
+            background: linear-gradient(180deg, rgba(71, 85, 105, 0.4) 0%, rgba(30, 41, 59, 0.28) 100%);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.05),
+                0 14px 32px rgba(2, 8, 23, 0.12);
+        }
+
+        .video-mapping-metric {
+            border: 1px solid rgba(148, 163, 184, 0.14);
+            background: linear-gradient(180deg, rgba(51, 65, 85, 0.44) 0%, rgba(30, 41, 59, 0.28) 100%);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+        }
+
+        .video-mapping-badge {
+            border: 1px solid rgba(148, 163, 184, 0.2) !important;
+            background: linear-gradient(180deg, rgba(71, 85, 105, 0.42) 0%, rgba(30, 41, 59, 0.28) 100%) !important;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+        }
+
+        .video-mapping-confidence {
+            border: 1px solid rgba(125, 211, 252, 0.26);
+            background: linear-gradient(180deg, rgba(56, 189, 248, 0.16) 0%, rgba(14, 165, 233, 0.08) 100%);
+            color: #d8f3ff;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+        }
+
+        .video-mapping-note {
+            border: 1px solid rgba(148, 163, 184, 0.14);
+            background: linear-gradient(180deg, rgba(51, 65, 85, 0.46) 0%, rgba(30, 41, 59, 0.32) 100%);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        }
     </style>
 </head>
 <body class="min-h-full">
@@ -301,10 +359,10 @@
                                 <div>
                                     <p class="text-[11px] font-semibold uppercase tracking-[0.32em] text-slate-500">Detections</p>
                                     <h3 class="mt-2 font-display text-2xl text-midnight">
-                                        {% if media_type == 'video' %}Detected video output{% else %}Detected items{% endif %}
+                                        {% if media_type == 'video' %}Detection mapping{% else %}Detected items{% endif %}
                                     </h3>
                                 </div>
-                                <div class="premium-accent-pill inline-flex items-center rounded-full px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.28em] text-amber-700">
+                                <div id="detectionCountBadge" class="premium-accent-pill inline-flex items-center rounded-full px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.28em] text-amber-700">
                                     {{ detection_count }} total
                                 </div>
                             </div>
@@ -315,6 +373,23 @@
                                 <p class="mt-3 text-sm leading-6 text-slate-600">
                                     Detection is running in the background. The detected video will appear here automatically when processing finishes.
                                 </p>
+                            </div>
+                            {% elif media_type == 'video' and job_status == 'completed' %}
+                            <div class="video-mapping-shell mt-5 rounded-[28px] p-5 text-slate-100 shadow-sm">
+                                <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                                    <div>
+                                        <p class="text-[11px] font-semibold uppercase tracking-[0.32em] text-slate-300">Live detections</p>
+                                        <p id="mappingFrameSummary" class="mt-3 max-w-2xl text-sm leading-6 text-slate-200">
+                                            Current frame results are listed here while the overlay stays on the video.
+                                        </p>
+                                    </div>
+                                    <div id="mappingFrameBadge" class="video-mapping-badge inline-flex items-center rounded-full px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-100">
+                                        Current frame
+                                    </div>
+                                </div>
+                                <div id="mappingStatsRow" class="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-5"></div>
+                                <div id="videoDetectionMappingPanel" class="mt-6 space-y-6"></div>
+                                <div id="mappingNotesPanel" class="mt-6"></div>
                             </div>
                             {% elif detections %}
                             <div class="mt-5 grid gap-4 xl:grid-cols-2">
@@ -418,6 +493,14 @@
             const overlayFrames = {{ video_overlay_frames|tojson }};
             const overlayBaseWidth = {{ video_overlay_width|tojson }};
             const overlayBaseHeight = {{ video_overlay_height|tojson }};
+            const initialPhaseOutput = {{ phase1_output|tojson }};
+            const detectionCountBadgeEl = document.getElementById('detectionCountBadge');
+            const mappingFrameSummaryEl = document.getElementById('mappingFrameSummary');
+            const mappingFrameBadgeEl = document.getElementById('mappingFrameBadge');
+            const mappingStatsRowEl = document.getElementById('mappingStatsRow');
+            const mappingPanelEl = document.getElementById('videoDetectionMappingPanel');
+            const mappingNotesPanelEl = document.getElementById('mappingNotesPanel');
+            let lastRenderedFrameKey = null;
 
             if (!modeSelect || !videoJobId) {
                 return;
@@ -436,6 +519,321 @@
                 nextUrl.searchParams.set('job_id', videoJobId);
                 window.location.assign(nextUrl.toString());
             });
+
+            function escapeHtml(value) {
+                return String(value == null ? '' : value)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+            }
+
+            function formatPercent(value) {
+                if (typeof value !== 'number' || Number.isNaN(value)) {
+                    return 'N/A';
+                }
+                return `${Math.round(value * 100)}%`;
+            }
+
+            function formatLabel(value) {
+                if (!value) {
+                    return 'N/A';
+                }
+                return String(value)
+                    .replace(/_/g, ' ')
+                    .replace(/\b\w/g, function (match) {
+                        return match.toUpperCase();
+                    });
+            }
+
+            function formatBox(bbox) {
+                if (!bbox || typeof bbox !== 'object') {
+                    return 'N/A';
+                }
+                const x = Math.round(Number(bbox.x) || 0);
+                const y = Math.round(Number(bbox.y) || 0);
+                const width = Math.round(Number(bbox.width) || 0);
+                const height = Math.round(Number(bbox.height) || 0);
+                return `x:${x}, y:${y}, w:${width}, h:${height}`;
+            }
+
+            function renderStatCard(label, value) {
+                return `
+                    <article class="video-mapping-stat rounded-[22px] p-4">
+                        <p class="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-300">${escapeHtml(label)}</p>
+                        <p class="mt-3 text-2xl font-semibold text-white">${escapeHtml(value)}</p>
+                    </article>
+                `;
+            }
+
+            function renderMetric(label, value, accentClass) {
+                const resolvedAccentClass = accentClass || 'text-slate-100';
+                return `
+                    <div class="video-mapping-metric rounded-[18px] p-4">
+                        <p class="text-[11px] font-semibold uppercase tracking-[0.26em] text-slate-400">${escapeHtml(label)}</p>
+                        <p class="mt-2 text-lg font-semibold ${resolvedAccentClass}">${escapeHtml(value)}</p>
+                    </div>
+                `;
+            }
+
+            function buildFrameKey(frameData, phaseOutput) {
+                if (frameData && (frameData.frame_index != null || frameData.video_time_seconds != null)) {
+                    return `${frameData.frame_index || 0}:${frameData.video_time_seconds || 0}:${activeMode}`;
+                }
+                if (phaseOutput && phaseOutput.frame_id != null) {
+                    return `${phaseOutput.frame_id}:${activeMode}`;
+                }
+                return `static:${activeMode}`;
+            }
+
+            function renderMappingPanel(phaseOutput, frameData) {
+                if (!mappingPanelEl || !mappingStatsRowEl) {
+                    return;
+                }
+
+                const output = phaseOutput || {};
+                const humans = Array.isArray(output.humans) ? output.humans : [];
+                const faces = Array.isArray(output.faces) ? output.faces : [];
+                const emotions = Array.isArray(output.emotions) ? output.emotions : [];
+                const actions = Array.isArray(output.actions) ? output.actions : [];
+                const objects = Array.isArray(output.objects) ? output.objects : [];
+                const detections = Array.isArray(output.detections) ? output.detections : [];
+                const notes = Array.isArray(output.notes) ? output.notes.filter(Boolean) : [];
+                const modelArtifacts = output.model_artifacts || {};
+                const uncertainCount = ['objects', 'humans', 'faces']
+                    .reduce(function (sum, key) {
+                        const items = Array.isArray(modelArtifacts[key]) ? modelArtifacts[key] : [];
+                        return sum + items.filter(function (item) {
+                            return item && item.uncertain;
+                        }).length;
+                    }, 0);
+                const emotionsByFaceId = new Map(
+                    emotions
+                        .filter(function (emotion) {
+                            return emotion && emotion.face_id;
+                        })
+                        .map(function (emotion) {
+                            return [emotion.face_id, emotion];
+                        })
+                );
+                const actionsByHumanId = new Map(
+                    actions
+                        .filter(function (action) {
+                            return action && action.human_id;
+                        })
+                        .map(function (action) {
+                            return [action.human_id, action];
+                        })
+                );
+
+                if (detectionCountBadgeEl) {
+                    detectionCountBadgeEl.textContent = `${detections.length} in frame`;
+                }
+
+                if (mappingFrameSummaryEl) {
+                    const summaryBits = [];
+                    if (humans.length) summaryBits.push(`${humans.length} person${humans.length === 1 ? '' : 's'}`);
+                    if (faces.length) summaryBits.push(`${faces.length} face${faces.length === 1 ? '' : 's'}`);
+                    if (emotions.length) summaryBits.push(`${emotions.length} emotion${emotions.length === 1 ? '' : 's'}`);
+                    if (actions.length) summaryBits.push(`${actions.length} action${actions.length === 1 ? '' : 's'}`);
+                    if (objects.length) summaryBits.push(`${objects.length} object${objects.length === 1 ? '' : 's'}`);
+                    mappingFrameSummaryEl.textContent = summaryBits.length
+                        ? `Current frame results follow the hierarchy human -> face -> emotion. Active entities: ${summaryBits.join(', ')}.`
+                        : 'No mapped detections are available in this frame for the selected mode.';
+                }
+
+                if (mappingFrameBadgeEl) {
+                    if (frameData && frameData.frame_index != null) {
+                        const timeText = typeof frameData.video_time_seconds === 'number'
+                            ? ` • ${frameData.video_time_seconds.toFixed(2)}s`
+                            : '';
+                        mappingFrameBadgeEl.textContent = `Frame ${frameData.frame_index}${timeText}`;
+                    } else {
+                        mappingFrameBadgeEl.textContent = 'Current frame';
+                    }
+                }
+
+                mappingStatsRowEl.innerHTML = [
+                    renderStatCard('Humans', humans.length),
+                    renderStatCard('Faces', faces.length),
+                    renderStatCard('Emotions', emotions.length),
+                    renderStatCard('Actions', actions.length),
+                    renderStatCard('Objects', objects.length),
+                ].join('');
+
+                if (!humans.length && !faces.length && !objects.length) {
+                    mappingPanelEl.innerHTML = `
+                        <div class="rounded-[24px] border border-dashed border-white/15 bg-white/5 px-6 py-10 text-center">
+                            <p class="font-display text-2xl text-white">No mapped detections in this frame</p>
+                            <p class="mt-3 text-sm leading-6 text-slate-300">
+                                Move the scrubber or switch the mode to inspect another part of the saved video artifact.
+                            </p>
+                        </div>
+                    `;
+                } else {
+                    const peopleMarkup = humans.length
+                        ? `
+                            <div class="mt-4 grid gap-4 xl:grid-cols-2">
+                                ${humans.map(function (human, index) {
+                                    const linkedFaces = faces
+                                        .filter(function (face) {
+                                            return face && face.parent_human_id === human.id;
+                                        })
+                                        .sort(function (left, right) {
+                                            return (right.confidence || 0) - (left.confidence || 0);
+                                        });
+                                    const primaryFace = linkedFaces[0] || null;
+                                    const linkedEmotion = primaryFace ? emotionsByFaceId.get(primaryFace.id) : null;
+                                    const linkedAction = actionsByHumanId.get(human.id) || null;
+                                    const poseText = human.visible_keypoint_count != null && human.keypoint_count
+                                        ? `${human.visible_keypoint_count} / ${human.keypoint_count} points`
+                                        : 'N/A';
+                                    return `
+                                        <article class="video-mapping-card rounded-[24px] p-5 shadow-sm">
+                                            <div class="flex items-start justify-between gap-3">
+                                                <div>
+                                                    <p class="text-2xl font-semibold text-white">Person ${index + 1}</p>
+                                                    <p class="mt-1 text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-400">${escapeHtml(human.id || `human_${index + 1}`)}</p>
+                                                </div>
+                                                <div class="video-mapping-confidence rounded-full px-3 py-1 text-sm font-semibold">
+                                                    ${escapeHtml(formatPercent(human.confidence))}
+                                                </div>
+                                            </div>
+                                            <div class="mt-5 grid gap-3 sm:grid-cols-2">
+                                                ${renderMetric('Human box', formatBox(human.bbox))}
+                                                ${renderMetric('Face', primaryFace ? `Yes (${formatPercent(primaryFace.confidence)})` : 'No')}
+                                                ${renderMetric(
+                                                    'Emotion',
+                                                    linkedEmotion ? `${formatLabel(linkedEmotion.label)} (${formatPercent(linkedEmotion.confidence)})` : 'N/A',
+                                                    linkedEmotion ? 'text-amber-200' : 'text-slate-100'
+                                                )}
+                                                ${renderMetric(
+                                                    'Action',
+                                                    linkedAction ? `${formatLabel(linkedAction.label)} (${formatPercent(linkedAction.confidence)})` : (human.summary && human.summary.action ? human.summary.action : 'N/A'),
+                                                    linkedAction ? 'text-emerald-200' : 'text-slate-100'
+                                                )}
+                                                ${renderMetric('Pose', poseText, poseText !== 'N/A' ? 'text-cyan-200' : 'text-slate-100')}
+                                                ${renderMetric('Mapped face', primaryFace ? (primaryFace.id || 'Mapped') : 'Not mapped')}
+                                            </div>
+                                        </article>
+                                    `;
+                                }).join('')}
+                            </div>
+                        `
+                        : `
+                            <div class="video-mapping-metric mt-4 rounded-[22px] border-dashed px-5 py-6 text-sm text-slate-300">
+                                No people were mapped in this frame.
+                            </div>
+                        `;
+
+                    const standaloneFaces = faces.filter(function (face) {
+                        return face && !face.parent_human_id;
+                    });
+                    const standaloneFacesMarkup = standaloneFaces.length
+                        ? `
+                            <div>
+                                <p class="text-[11px] font-semibold uppercase tracking-[0.32em] text-slate-300">Standalone faces</p>
+                                <div class="mt-4 grid gap-4 xl:grid-cols-2">
+                                    ${standaloneFaces.map(function (face, index) {
+                                        const linkedEmotion = emotionsByFaceId.get(face.id);
+                                        return `
+                                            <article class="video-mapping-card rounded-[24px] p-5 shadow-sm">
+                                                <div class="flex items-start justify-between gap-3">
+                                                    <div>
+                                                        <p class="text-2xl font-semibold text-white">Face ${index + 1}</p>
+                                                        <p class="mt-1 text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-400">${escapeHtml(face.id || `face_${index + 1}`)}</p>
+                                                    </div>
+                                                    <div class="video-mapping-confidence rounded-full px-3 py-1 text-sm font-semibold">
+                                                        ${escapeHtml(formatPercent(face.confidence))}
+                                                    </div>
+                                                </div>
+                                                <div class="mt-5 grid gap-3 sm:grid-cols-2">
+                                                    ${renderMetric('Face box', formatBox(face.bbox))}
+                                                    ${renderMetric(
+                                                        'Emotion',
+                                                        linkedEmotion ? `${formatLabel(linkedEmotion.label)} (${formatPercent(linkedEmotion.confidence)})` : 'N/A',
+                                                        linkedEmotion ? 'text-amber-200' : 'text-slate-100'
+                                                    )}
+                                                </div>
+                                            </article>
+                                        `;
+                                    }).join('')}
+                                </div>
+                            </div>
+                        `
+                        : '';
+
+                    const objectsMarkup = objects.length
+                        ? `
+                            <div>
+                                <p class="text-[11px] font-semibold uppercase tracking-[0.32em] text-slate-300">Scene objects</p>
+                                <div class="mt-4 grid gap-4 xl:grid-cols-2">
+                                    ${objects.map(function (objectItem, index) {
+                                        return `
+                                            <article class="video-mapping-card rounded-[24px] p-5 shadow-sm">
+                                                <div class="flex items-start justify-between gap-3">
+                                                    <div>
+                                                        <p class="text-2xl font-semibold text-white">${escapeHtml(formatLabel(objectItem.label || `Object ${index + 1}`))}</p>
+                                                        <p class="mt-1 text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-400">${escapeHtml(objectItem.id || `object_${index + 1}`)}</p>
+                                                    </div>
+                                                    <div class="video-mapping-confidence rounded-full px-3 py-1 text-sm font-semibold">
+                                                        ${escapeHtml(formatPercent(objectItem.confidence))}
+                                                    </div>
+                                                </div>
+                                                <div class="mt-5">
+                                                    ${renderMetric('Object box', formatBox(objectItem.bbox))}
+                                                </div>
+                                            </article>
+                                        `;
+                                    }).join('')}
+                                </div>
+                            </div>
+                        `
+                        : '';
+
+                    mappingPanelEl.innerHTML = `
+                        <section>
+                            <p class="text-[11px] font-semibold uppercase tracking-[0.32em] text-slate-300">People mapping</p>
+                            ${peopleMarkup}
+                        </section>
+                        ${standaloneFacesMarkup}
+                        ${objectsMarkup}
+                    `;
+                }
+
+                if (mappingNotesPanelEl) {
+                    const noteBlocks = [];
+                    if (uncertainCount) {
+                        noteBlocks.push(`${uncertainCount} detection(s) flagged as uncertain due to low confidence.`);
+                    }
+                    noteBlocks.push.apply(noteBlocks, notes);
+                    mappingNotesPanelEl.innerHTML = noteBlocks.length
+                        ? `
+                            <div class="video-mapping-note rounded-[22px] px-5 py-4 text-sm text-slate-200">
+                                ${noteBlocks.map(function (note) {
+                                    return `<p>${escapeHtml(note)}</p>`;
+                                }).join('')}
+                            </div>
+                        `
+                        : '';
+                }
+            }
+
+            function syncMappingPanel(phaseOutput, frameData) {
+                const frameKey = buildFrameKey(frameData, phaseOutput);
+                if (frameKey === lastRenderedFrameKey) {
+                    return;
+                }
+                lastRenderedFrameKey = frameKey;
+                renderMappingPanel(phaseOutput, frameData);
+            }
+
+            const initialFrame = overlayFrames.length ? overlayFrames[0] : null;
+            syncMappingPanel(
+                initialFrame && initialFrame.phase1_output ? initialFrame.phase1_output : initialPhaseOutput,
+                initialFrame
+            );
 
             if (!videoEl || !overlayCanvas || !overlayFrames.length || !overlayBaseWidth || !overlayBaseHeight) {
                 return;
@@ -512,6 +910,8 @@
                 if (!activeFrame || !activeFrame.phase1_output) {
                     return;
                 }
+
+                syncMappingPanel(activeFrame.phase1_output, activeFrame);
 
                 const detections = activeFrame.phase1_output.detections || [];
                 const scaleX = width / overlayBaseWidth;

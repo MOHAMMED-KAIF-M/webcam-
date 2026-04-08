@@ -236,11 +236,11 @@ DETECTION_MODES = {
     },
     'face_emotion': {
         'label': 'Face + Emotion Detection',
-        'models': ['face', 'emotion'],
+        'models': ['human', 'face', 'emotion'],
     },
     'face': {
         'label': 'Face Detection',
-        'models': ['face'],
+        'models': ['human', 'face'],
     },
     'human': {
         'label': 'Human Detection',
@@ -1093,6 +1093,14 @@ def normalize_face_artifact_for_mode(det, mode):
     return normalized
 
 
+def filter_mapped_faces(face_detections):
+    return [
+        dict(face_det)
+        for face_det in face_detections
+        if face_det.get('parent_human_id')
+    ]
+
+
 def filter_phase1_output_by_mode(phase1_output, mode):
     model_artifacts = phase1_output.get('model_artifacts') or {}
     if not model_artifacts:
@@ -1103,6 +1111,16 @@ def filter_phase1_output_by_mode(phase1_output, mode):
     faces = model_artifacts.get('faces') or []
     emotions = model_artifacts.get('emotions') or []
     actions = model_artifacts.get('actions') or []
+    mapped_face_ids = {
+        det.get('id')
+        for det in faces
+        if det.get('id') and det.get('parent_human_id')
+    }
+    mapped_human_ids = {
+        det.get('parent_human_id')
+        for det in faces
+        if det.get('parent_human_id')
+    }
 
     if mode == 'object':
         filtered_objects = [dict(det) for det in objects]
@@ -1130,15 +1148,35 @@ def filter_phase1_output_by_mode(phase1_output, mode):
         filtered_actions = []
     elif mode == 'face':
         filtered_objects = []
-        filtered_humans = []
-        filtered_faces = [normalize_face_artifact_for_mode(det, mode) for det in faces]
+        filtered_humans = [
+            normalize_human_artifact_for_mode(det, mode)
+            for det in humans
+            if det.get('id') in mapped_human_ids
+        ]
+        filtered_faces = [
+            normalize_face_artifact_for_mode(det, mode)
+            for det in faces
+            if det.get('id') in mapped_face_ids
+        ]
         filtered_emotions = []
         filtered_actions = []
     elif mode == 'face_emotion':
         filtered_objects = []
-        filtered_humans = []
-        filtered_faces = [normalize_face_artifact_for_mode(det, mode) for det in faces]
-        filtered_emotions = [dict(emotion) for emotion in emotions]
+        filtered_humans = [
+            normalize_human_artifact_for_mode(det, mode)
+            for det in humans
+            if det.get('id') in mapped_human_ids
+        ]
+        filtered_faces = [
+            normalize_face_artifact_for_mode(det, mode)
+            for det in faces
+            if det.get('id') in mapped_face_ids
+        ]
+        filtered_emotions = [
+            dict(emotion)
+            for emotion in emotions
+            if emotion.get('face_id') in mapped_face_ids
+        ]
         filtered_actions = []
     else:
         filtered_objects = [dict(det) for det in objects]
@@ -2905,6 +2943,9 @@ def run_phase1_pipeline(
             image_np,
             include_pose=not optimize_for_video,
         )
+    elif mode in {'face', 'face_emotion'}:
+        object_detections = []
+        human_detections = detect_objects(image_np, mode='human')
     else:
         object_detections = detect_objects(image_np, mode=mode)
         human_detections = extract_humans(object_detections)
@@ -2912,12 +2953,16 @@ def run_phase1_pipeline(
     assign_entity_ids(object_detections, 'obj')
     assign_entity_ids(human_detections, 'human')
 
-    face_detections = detect_faces(image_np) if 'face' in DETECTION_MODES[mode]['models'] else []
-    assign_entity_ids(face_detections, 'face')
-    face_detections = map_faces_to_humans(face_detections, human_detections)
+    face_detections = []
+    if 'face' in DETECTION_MODES[mode]['models'] and human_detections:
+        face_detections = detect_faces(image_np)
+        assign_entity_ids(face_detections, 'face')
+        face_detections = filter_mapped_faces(
+            map_faces_to_humans(face_detections, human_detections)
+        )
 
     emotions = []
-    if 'emotion' in DETECTION_MODES[mode]['models']:
+    if 'emotion' in DETECTION_MODES[mode]['models'] and face_detections:
         face_detections, emotions = detect_emotions(image_np, face_detections)
 
     if (mode == 'combined' or 'action' in DETECTION_MODES[mode]['models']) and 'action' in MODELS:
